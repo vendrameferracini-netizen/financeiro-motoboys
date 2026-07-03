@@ -1092,15 +1092,6 @@ function fillRiderFormLegacy(name = "") {
   $("riderNote").value = rider?.note || "";
 }
 
-function renderMotoboys() {
-  ensureWorkTypeCards();
-  $("motoboyCount").textContent = `${num(activeRiders().length)} ativos / ${num(allRiders().length)} cadastros`;
-  $("partnerStrip").innerHTML = RESPONSIBLES.map((p) => `<button class="partner-button" data-partner="${p}">${p}</button>`).join("");
-  $("riderList").innerHTML = allRiders().map((r) => `<button class="rider-button ${normalize(r.name) === normalize(selectedRider) ? "active" : ""} ${r.active === false ? "inactive" : ""}" data-rider-id="${escapeHtml(r.id)}" data-rider="${escapeHtml(r.name)}"><strong>${escapeHtml(r.name)}</strong><span>${r.active === false ? "Inativo" : "Ativo"} | ${escapeHtml(r.region || "sem região")} | ${escapeHtml(r.collection || "com coleta")}</span></button>`).join("");
-  fillRiderForm(selectedRider);
-  renderRiderProfile(selectedRider);
-}
-
 function fillRiderForm(name = "") {
   const rider = editingRiderId ? riderById(editingRiderId) : riderByName(name);
   if (!$("riderName")) return;
@@ -1120,14 +1111,6 @@ function fillRiderForm(name = "") {
 function riderData(name) {
   const key = normalize(name);
   return { daily: allDaily().filter((x) => normalize(x.rider) === key), discounts: allDiscounts().filter((x) => normalize(x.closingRider || x.rider) === key), closings: closingRecords().filter((x) => normalize(x.rider) === key) };
-}
-
-function renderRiderProfile(name) {
-  $("riderProfileTitle").textContent = name ? `Ficha individual - ${name}` : "Ficha individual";
-  const d = riderData(name);
-  const vales = d.discounts.filter((x) => x.type === "Vale"), losses = d.discounts.filter((x) => normalize(x.type).includes("extravio") || normalize(x.type).includes("ocorrencia")), others = d.discounts.filter((x) => x.type !== "Vale" && !normalize(x.type).includes("extravio") && !normalize(x.type).includes("ocorrencia"));
-  const gross = sum(d.daily, "gross"), net = gross - sum(vales, "value") - sum(losses, "value") - sum(others, "value");
-  $("riderProfile").innerHTML = `<div class="profile"><div class="summary-grid">${card("Bruto", money(gross))}${card("Vales", money(sum(vales, "value")))}${card("Extravios", money(sum(losses, "value")))}${card("Outros descontos", money(sum(others, "value")))}${card("Líquido", money(net))}</div>${tableBlock("Produção diária", ["Data","Tipo","ML","Shopee","Avulso","Bruto"], d.daily.map((x) => [displayDate(x.date), workTypeLabel(dailyTypeFor(x)), num(x.ml), num(x.shopee), num(x.avulso), money(x.gross)]))}${tableBlock("Vales", ["Data","Valor","Motivo","Sócio"], vales.map((x) => [displayDate(x.date), money(x.value), x.reason, x.partner]))}${tableBlock("Extravios", ["Data","Código","Valor","Motivo","Sócio"], losses.map((x) => [displayDate(x.date), x.code, money(x.value), x.reason, x.partner]))}${tableBlock("Descontos", ["Data","Tipo","Valor","Motivo","Sócio"], others.map((x) => [displayDate(x.date), x.type, money(x.value), x.reason, x.partner]))}${tableBlock("Fechamento quinzenal", ["Período","Bruto","Vales","Extravios","Descontos","Líquido","Status"], d.closings.map((x) => [x.period, money(x.gross), money(x.vales), money(x.losses), money(x.discounts), money(x.net), x.status]))}</div>`;
 }
 
 function renderMotoboys() {
