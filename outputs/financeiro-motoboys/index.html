@@ -31,7 +31,7 @@
       <button class="nav-item" data-view="fechamentos">Fechamentos</button>
       <button class="nav-item" data-view="recibos">Recibos</button>
       <button class="nav-item" data-view="relatorios">Relatórios</button>
-      <button class="nav-item" data-view="auditoria">Auditoria</button>
+      <button class="nav-item" data-view="backup">Backup</button>
       <button class="nav-item" data-view="configuracoes">Configurações</button>
     </nav>
   </aside>
@@ -196,7 +196,28 @@
       <section class="panel"><div class="panel-head"><h2>Relatório de pendências</h2></div><div id="pendingReport" class="alerts"></div></section>
     </section>
 
-    <section id="auditoria" class="view"><section class="panel"><div class="panel-head"><h2>Auditoria da importação</h2></div><div id="auditImport"></div></section></section>
+    <section id="backup" class="view">
+      <div class="grid two">
+        <section class="panel">
+          <div class="panel-head"><h2>Backup dos dados</h2></div>
+          <div class="actions">
+            <button id="exportBackup" class="primary" type="button">Exportar backup</button>
+            <button id="importBackup" type="button">Importar backup</button>
+            <button id="clearOperationalBackup" type="button">Limpar dados operacionais</button>
+            <input id="backupFile" type="file" accept="application/json,.json" hidden>
+          </div>
+          <div id="backupFeedback" class="feedback" role="status"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Informacoes do backup</h2></div>
+          <div id="backupInfo" class="cards"></div>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="panel-head"><h2>Historico recente</h2></div>
+        <div id="backupHistory"></div>
+      </section>
+    </section>
 
     <section id="configuracoes" class="view">
       <section class="panel form"><div class="panel-head"><h2>Valores padrão</h2></div><label>Mercado Livre<input id="configMl" type="text" value="R$ 8,00"></label><label>Shopee<input id="configShopee" type="text" value="R$ 5,00"></label><label>Avulso<input id="configAvulso" type="text" value="R$ 0,00"></label><div class="actions"><button id="saveConfig" class="primary" type="button">Salvar configurações</button><button id="clearOperational" type="button">Limpar dados operacionais</button></div></section>

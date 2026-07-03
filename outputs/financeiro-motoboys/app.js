@@ -26,29 +26,36 @@ let selectedPartner = "GIL";
 
 const $ = (id) => document.getElementById(id);
 
+function defaultState() {
+  return { riders: [], daily: [], baseEntries: [], discounts: [], expenses: [], paid: {}, payments: [], basePaid: {}, config: { ml: 8, shopee: 5, avulso: 0 }, audit: [], cleanOperational: true, lastBackupAt: "" };
+}
+
+function normalizeStateData(data) {
+  const defaults = defaultState();
+  const parsed = data && typeof data === "object" ? data : {};
+  return {
+    ...defaults,
+    ...parsed,
+    riders: Array.isArray(parsed.riders) ? parsed.riders : [],
+    daily: Array.isArray(parsed.daily) ? parsed.daily : [],
+    baseEntries: Array.isArray(parsed.baseEntries) ? parsed.baseEntries : [],
+    discounts: Array.isArray(parsed.discounts) ? parsed.discounts : [],
+    expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
+    payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+    paid: parsed.paid && typeof parsed.paid === "object" ? parsed.paid : {},
+    basePaid: parsed.basePaid && typeof parsed.basePaid === "object" ? parsed.basePaid : {},
+    config: { ...defaults.config, ...(parsed.config || {}) },
+    audit: Array.isArray(parsed.audit) ? parsed.audit : [],
+    lastBackupAt: parsed.lastBackupAt || ""
+  };
+}
+
 function loadState() {
-  const defaults = { riders: [], daily: [], baseEntries: [], discounts: [], expenses: [], paid: {}, payments: [], basePaid: {}, config: { ml: 8, shopee: 5, avulso: 0 }, audit: [], cleanOperational: true };
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        ...defaults,
-        ...parsed,
-        riders: Array.isArray(parsed.riders) ? parsed.riders : [],
-        daily: Array.isArray(parsed.daily) ? parsed.daily : [],
-        baseEntries: Array.isArray(parsed.baseEntries) ? parsed.baseEntries : [],
-        discounts: Array.isArray(parsed.discounts) ? parsed.discounts : [],
-        expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
-        payments: Array.isArray(parsed.payments) ? parsed.payments : [],
-        paid: parsed.paid || {},
-        basePaid: parsed.basePaid || {},
-        config: { ...defaults.config, ...(parsed.config || {}) },
-        audit: Array.isArray(parsed.audit) ? parsed.audit : []
-      };
-    }
+    if (raw) return normalizeStateData(JSON.parse(raw));
   } catch {}
-  return defaults;
+  return defaultState();
 }
 
 function saveState(action, detail, meta = null) {
@@ -976,7 +983,7 @@ function workTypeSummaryCards() {
 function sum(list, key) { return list.reduce((s, x) => s + Number(x[key] || 0), 0); }
 
 function renderAll() {
-  renderOptions(); renderDashboardV2(); renderMotoboys(); renderFreelancers(); renderPartners(); renderBase(); renderDaily(); renderDiscounts(); renderExpenses(); renderClosings(); renderReceipts(); renderReports(); renderAuditV2(); renderConfig();
+  renderOptions(); renderDashboardV2(); renderMotoboys(); renderFreelancers(); renderPartners(); renderBase(); renderDaily(); renderDiscounts(); renderExpenses(); renderClosings(); renderReceipts(); renderReports(); renderBackup(); renderConfig();
 }
 
 function renderOptions() {
@@ -1274,6 +1281,83 @@ function renderAuditV2() {
 }
 
 function renderConfig() { $("configMl").value = money(state.config.ml); $("configShopee").value = money(state.config.shopee); $("configAvulso").value = money(state.config.avulso); }
+
+function backupPayload() {
+  return {
+    app: "financeiro-motoboys",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    partners: PARTNERS,
+    responsibles: RESPONSIBLES,
+    state: normalizeStateData(state)
+  };
+}
+
+function showBackupFeedback(message, type = "ok") {
+  const el = $("backupFeedback");
+  if (!el) return;
+  el.textContent = message;
+  el.className = `feedback ${type}`;
+}
+
+function downloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportBackupData() {
+  state.lastBackupAt = new Date().toISOString();
+  saveState("Backup exportado", "JSON completo dos dados do sistema.");
+  downloadJson(`financeiro-motoboys-backup-${state.lastBackupAt.slice(0, 10)}.json`, backupPayload());
+  showBackupFeedback("Backup exportado com sucesso.", "ok");
+  renderBackup();
+}
+
+function importBackupText(text) {
+  const parsed = JSON.parse(text);
+  const nextState = normalizeStateData(parsed.state || parsed);
+  if (!Array.isArray(nextState.riders)) throw new Error("Arquivo de backup invalido.");
+  state = nextState;
+  saveState("Backup importado", "Dados restaurados a partir de arquivo JSON.");
+  selectedRider = allRiders()[0]?.name || "";
+  editingRiderId = "";
+  editingDiscountId = "";
+  editingExpenseId = "";
+  renderAll();
+  fillDefaults();
+  showBackupFeedback("Backup importado com sucesso.", "ok");
+}
+
+function clearOperationalData(origin = "Backup") {
+  if (!window.confirm("Limpar dados operacionais? Cadastros, valores dos motoboys e configuracoes serao preservados.")) return;
+  resetOperationalBuckets();
+  state.cleanOperational = true;
+  state.cleanOperationalVersion = CLEAN_OPERATIONAL_VERSION;
+  saveState("Limpeza operacional", `${origin}: lancamentos, descontos, despesas, recibos e pagamentos foram zerados.`);
+  renderAll();
+  showBackupFeedback("Dados operacionais limpos com sucesso.", "ok");
+}
+
+function renderBackup() {
+  if (!$("backupInfo")) return;
+  const lastBackup = state.lastBackupAt ? displayDate(state.lastBackupAt.slice(0, 10)) : "Nenhum backup exportado";
+  $("backupInfo").innerHTML = [
+    card("Ultimo backup", lastBackup),
+    card("Motoboys", num((state.riders || []).length)),
+    card("Lancamentos", num((state.daily || []).length + (state.baseEntries || []).length)),
+    card("Descontos", num((state.discounts || []).length)),
+    card("Despesas", num((state.expenses || []).length))
+  ].join("");
+  const history = (state.audit || []).slice(0, 12).map((x) => [displayDate(String(x.at || "").slice(0, 10)), x.action || "", x.detail || ""]);
+  $("backupHistory").innerHTML = tableBlock("Alteracoes recentes", ["Data","Acao","Detalhe"], history);
+}
 
 function isLikelyDuplicate(list, row, ignoreId = "") {
   const key = uniqueKey([row.type || row.kind || "", row.date, row.rider || row.partner || row.responsible || "", moneyKey(row.value || row.gross || row.totalPay), row.source || "manual"]);
@@ -1654,6 +1738,28 @@ function bindEvents() {
     state.cleanOperationalVersion = CLEAN_OPERATIONAL_VERSION;
     saveState("Limpeza operacional", "Lancamentos, fechamentos pagos, descontos, entradas e despesas foram zerados.");
     renderAll();
+  });
+  $("clearOperationalBackup")?.addEventListener("click", () => clearOperationalData("Backup"));
+  $("exportBackup")?.addEventListener("click", exportBackupData);
+  $("importBackup")?.addEventListener("click", () => $("backupFile")?.click());
+  $("backupFile")?.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!window.confirm("Importar este backup e substituir os dados atuais do sistema?")) {
+      e.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        importBackupText(String(reader.result || ""));
+      } catch (error) {
+        showBackupFeedback(`Erro ao importar backup: ${error.message}`, "error");
+      } finally {
+        e.target.value = "";
+      }
+    };
+    reader.readAsText(file);
   });
   $("exportExcel").addEventListener("click", exportExcel); $("printPage").addEventListener("click", () => window.print());
 }
