@@ -1,24 +1,6 @@
 {
   "cleanUrls": true,
   "trailingSlash": false,
-  "rewrites": [
-    {
-      "source": "/manifest.json",
-      "destination": "/outputs/financeiro-motoboys/manifest.json"
-    },
-    {
-      "source": "/sw.js",
-      "destination": "/outputs/financeiro-motoboys/sw.js"
-    },
-    {
-      "source": "/icons/:path*",
-      "destination": "/outputs/financeiro-motoboys/icons/:path*"
-    },
-    {
-      "source": "/:path*",
-      "destination": "/outputs/financeiro-motoboys/:path*"
-    }
-  ],
   "headers": [
     {
       "source": "/sw.js",

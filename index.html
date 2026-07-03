@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="description" content="Controle financeiro de motoboys, freelancers, fechamentos, recibos e relatórios.">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Motoboys">
+  <title>Financeiro de Motoboys e Sócios</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span>Financeiro</span><strong>Motoboys</strong></div>
+    <nav class="main-nav" aria-label="Menu principal">
+      <button class="nav-item active" data-view="dashboard">Dashboard</button>
+      <button class="nav-item" data-view="motoboys">Motoboys</button>
+      <button class="nav-item" data-view="freelancers">Freelancers</button>
+      <button class="nav-item" data-view="socios">Sócios</button>
+      <button class="nav-item" data-view="base">Entrada de Pacotes da Base</button>
+      <button class="nav-item" data-view="lancamentos">Lançamento Diário</button>
+      <button class="nav-item" data-view="descontos">Descontos</button>
+      <button class="nav-item" data-view="descontos-base">Descontos da Base</button>
+      <button class="nav-item" data-view="despesas">Despesas da Base</button>
+      <button class="nav-item" data-view="fechamentos">Fechamentos</button>
+      <button class="nav-item" data-view="recibos">Recibos</button>
+      <button class="nav-item" data-view="relatorios">Relatórios</button>
+      <button class="nav-item" data-view="auditoria">Auditoria</button>
+      <button class="nav-item" data-view="configuracoes">Configurações</button>
+    </nav>
+  </aside>
+
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Controle financeiro operacional</p>
+        <h1 id="viewTitle">Dashboard</h1>
+      </div>
+      <div class="top-actions">
+        <input id="quickSearch" type="search" placeholder="Buscar motoboy, sócio, ocorrência ou status">
+        <select id="periodFilter"></select>
+        <select id="statusFilter"><option value="">Todos os status</option><option value="pendente">pendente</option><option value="conferido">conferido</option><option value="pago">pago</option></select>
+        <button id="exportExcel" type="button">Excel</button>
+        <button id="printPage" type="button">PDF/Imprimir</button>
+      </div>
+    </header>
+
+    <section id="dashboard" class="view active">
+      <div id="dashboardCards" class="cards"></div>
+      <div class="grid two">
+        <section class="panel"><div class="panel-head"><h2>Resumo Operacional</h2></div><div id="operationalSummary"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Resumo de Caixa</h2></div><div id="cashSummary"></div></section>
+      </div>
+      <section class="panel"><div class="panel-head"><h2>Controle por Gestor</h2></div><div id="managerControl"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Comparativo de Pacotes</h2></div><div id="packageComparison"></div></section>
+      <div class="grid two">
+        <section class="panel"><div class="panel-head"><h2>Pacotes por motoboy</h2></div><div id="chartPackages" class="bars"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Valor bruto por motoboy</h2></div><div id="chartGross" class="bars"></div></section>
+      </div>
+      <div class="grid two">
+        <section class="panel"><div class="panel-head"><h2>Valor líquido por motoboy</h2></div><div id="chartNet" class="bars"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Descontos por responsável</h2></div><div id="chartDiscounts" class="bars"></div></section>
+      </div>
+      <div class="grid two">
+        <section class="panel"><div class="panel-head"><h2>Entrada x saída</h2></div><div id="chartEntryExit" class="bars"></div></section>
+        <section class="panel"><div class="panel-head"><h2>Despesas fixas x variáveis</h2></div><div id="chartExpenses" class="bars"></div></section>
+      </div>
+      <div class="grid two">
+        <section class="panel"><div class="panel-head"><h2>Ranking de produção</h2></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Motoboy</th><th>Pacotes</th><th>Bruto</th><th>Líquido</th></tr></thead><tbody id="rankingRows"></tbody></table></div></section>
+        <section class="panel"><div class="panel-head"><h2>Pendências e alertas</h2></div><div id="alertRows" class="alerts"></div></section>
+      </div>
+    </section>
+
+    <section id="motoboys" class="view">
+      <div class="grid motoboy-layout">
+        <section class="panel"><div class="panel-head"><h2>Motoboys</h2><span id="motoboyCount" class="muted"></span></div><form id="riderForm" class="form"><input id="riderId" type="hidden"><label>Nome<input id="riderName" type="text" required></label><div class="inline two-cols"><label>Regiao<input id="riderRegion" type="text" required></label><label>Tipo de trabalho<select id="riderCollection" required><option value="com coleta">Com coleta</option><option value="sem coleta">Sem coleta</option><option value="freelancer">Freelancer</option></select></label></div><div class="inline three"><label>Valor ML<input id="riderRateMl" type="text" value="R$ 8,00"></label><label>Valor Shopee<input id="riderRateShopee" type="text" value="R$ 5,00"></label><label>Valor Avulso<input id="riderRateAvulso" type="text" value="R$ 0,00"></label></div><label>Status<select id="riderStatus"><option value="ativo">ativo</option><option value="inativo">inativo</option></select></label><label>Observacoes<input id="riderNote" type="text"></label><div id="riderFeedback" class="feedback" role="status"></div><div class="actions"><button class="primary" type="submit">Salvar motoboy</button><button id="newRider" type="button">Novo</button><button id="toggleRider" type="button">Ativar/Inativar</button><button id="removeRider" type="button">Remover</button></div></form><div id="partnerStrip" class="partner-strip"></div><div id="riderList" class="rider-list"></div></section>
+        <section class="panel"><div class="panel-head"><h2 id="riderProfileTitle">Ficha individual</h2></div><div id="riderProfile"></div></section>
+      </div>
+    </section>
+
+    <section id="freelancers" class="view">
+      <section class="panel"><div class="panel-head"><h2>Freelancers</h2><span id="freelancerMeta" class="muted"></span></div><div id="freelancerCards" class="cards"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Freelancers cadastrados</h2></div><div id="freelancerList" class="rider-list"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Produção e lucro</h2></div><div class="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>ML</th><th>Shopee</th><th>Total pacotes</th><th>Valor pago</th><th>Lucro gerado</th><th>Status</th><th>Recibo</th></tr></thead><tbody id="freelancerRows"></tbody></table></div></section>
+    </section>
+
+    <section id="socios" class="view">
+      <section class="panel"><div class="panel-head"><h2>Sócios</h2><span class="muted">GIL, SALES e GUILHERME</span></div><div id="partnerCards" class="partner-strip"></div></section>
+      <section class="panel"><div class="panel-head"><h2 id="partnerProfileTitle">Ficha do sócio</h2></div><div id="partnerProfile"></div></section>
+    </section>
+
+    <section id="base" class="view">
+      <div class="grid form-grid">
+        <form id="baseForm" class="panel form">
+          <div class="panel-head"><h2>Entrada de Pacotes da Base</h2></div>
+          <label>Data<input id="baseDate" type="date" required></label>
+          <label>Sócio/Base<select id="basePartner"><option>GIL</option><option>SALES</option><option>GUILHERME</option></select></label>
+          <div class="inline two-cols"><label>Quantidade ML entrada<input id="baseMl" type="number" min="0" step="1" value="0"></label><label>Quantidade Shopee entrada<input id="baseShopee" type="number" min="0" step="1" value="0"></label></div>
+          <div class="inline two-cols"><label>Total de pacotes<input id="baseTotalPackages" type="text" readonly></label><label>Valor total a pagar<input id="baseTotalPay" type="text" readonly></label></div>
+          <div class="inline two-cols"><label>Valor ML<input id="baseValueMl" type="text" readonly></label><label>Valor Shopee<input id="baseValueShopee" type="text" readonly></label></div>
+          <label>Observação<input id="baseNote" type="text"></label>
+          <label>Responsável pelo lançamento<input id="baseResponsible" type="text"></label>
+          <button class="primary" type="submit">Salvar entrada</button>
+        </form>
+        <section class="panel"><div class="panel-head"><h2>Entradas lançadas</h2></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Sócio/Base</th><th>ML</th><th>Shopee</th><th>Total pacotes</th><th>Total a pagar</th><th>Ações</th></tr></thead><tbody id="baseRows"></tbody></table></div></section>
+      </div>
+      <section class="panel"><div class="panel-head"><h2>Fechamento quinzenal da base</h2></div><div class="table-wrap"><table><thead><tr><th>Sócio/Base</th><th>Período</th><th>ML entrada</th><th>Shopee entrada</th><th>Total pacotes</th><th>Valor ML</th><th>Valor Shopee</th><th>Total a pagar</th><th>Status</th></tr></thead><tbody id="baseClosingRows"></tbody></table></div></section>
+    </section>
+
+    <section id="lancamentos" class="view">
+      <div class="grid form-grid">
+        <form id="dailyForm" class="panel form">
+          <div class="panel-head"><h2>Lançamento diário do motoboy</h2></div>
+          <label>Data<input id="dailyDate" type="date" required></label>
+          <label>Motoboy<select id="dailyRider" required></select></label>
+          <div class="daily-type-field">
+            <span>Tipo do lançamento</span>
+            <button id="dailyTypeSwitch" class="daily-type-switch is-with-collection" type="button" role="switch" aria-checked="true" aria-label="Tipo do lançamento: com coleta">
+              <span class="daily-type-text">COM COLETA</span>
+              <span class="daily-type-knob" aria-hidden="true"></span>
+            </button>
+            <input id="dailyType" type="hidden" value="com coleta">
+          </div>
+          <div class="inline three"><label>Mercado Livre<input id="dailyMl" type="number" min="0" step="1" value="0"></label><label>Shopee<input id="dailyShopee" type="number" min="0" step="1" value="0"></label><label>Avulso<input id="dailyAvulso" type="number" min="0" step="1" value="0"></label></div>
+          <div class="inline three"><label>Valor unitário ML<input id="dailyRateMl" type="text" value="R$ 8,00"></label><label>Valor unitário Shopee<input id="dailyRateShopee" type="text" value="R$ 5,00"></label><label>Valor unitário Avulso<input id="dailyRateAvulso" type="text" value="R$ 0,00"></label></div>
+          <label>Total automático<input id="dailyGross" type="text" readonly></label>
+          <label>Responsável<input id="dailyResponsible" type="text"></label>
+          <label>Observação<input id="dailyNote" type="text"></label>
+          <button class="primary" type="submit">Salvar lançamento</button>
+        </form>
+        <section class="panel"><div class="panel-head"><h2>Produção diária</h2></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Motoboy</th><th>Tipo</th><th>ML</th><th>Shopee</th><th>Avulso</th><th>Total bruto</th><th>Ações</th></tr></thead><tbody id="dailyRows"></tbody></table></div></section>
+      </div>
+    </section>
+
+    <section id="descontos" class="view">
+      <div class="grid form-grid">
+        <form id="discountForm" class="panel form">
+          <div class="panel-head"><h2>Lançamento de Descontos</h2></div>
+          <label>Data<input id="discountDate" type="date" required></label>
+          <label>Responsável/Sócio<select id="discountPartner"><option>GIL</option><option>SALES</option><option>GUILHERME</option><option>BASE</option></select></label>
+          <label>Motoboy<select id="discountRider" required></select></label>
+          <label>Tipo<select id="discountType"><option>Vale</option><option>Extravio</option><option>Ocorrência</option><option>Outro desconto</option></select></label>
+          <label>Valor<input id="discountValue" type="text" value="R$ 0,00"></label>
+          <label>Código do pacote<input id="discountCode" type="text"></label>
+          <label>Motivo<input id="discountReason" type="text"></label>
+          <label>Observação<input id="discountNote" type="text"></label>
+          <button class="primary" type="submit">Salvar desconto</button>
+        </form>
+        <section class="panel"><div class="panel-head"><h2>Descontos registrados</h2></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Responsável</th><th>Motoboy</th><th>Tipo</th><th>Valor</th><th>Observação</th><th>Aba original</th><th>Linha</th><th>Coluna</th><th>Ações</th></tr></thead><tbody id="discountRows"></tbody></table></div></section>
+      </div>
+    </section>
+
+    <section id="descontos-base" class="view">
+      <section class="panel"><div class="panel-head"><h2>Descontos da Base</h2><span class="muted">Lancamentos com responsavel BASE</span></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Motoboy</th><th>Tipo</th><th>Valor</th><th>Motivo</th><th>Observacao</th><th>Acoes</th></tr></thead><tbody id="baseDiscountRows"></tbody></table></div></section>
+    </section>
+
+    <section id="despesas" class="view">
+      <div class="grid form-grid">
+        <form id="expenseForm" class="panel form">
+          <div class="panel-head"><h2>Despesas da Base</h2></div>
+          <input id="expenseId" type="hidden">
+          <label>Data<input id="expenseDate" type="date" required></label>
+          <label>Tipo<select id="expenseType"><option value="fixa">Fixa</option><option value="variavel">Variavel</option></select></label>
+          <label>Categoria<input id="expenseCategory" type="text" required></label>
+          <label>Descricao<input id="expenseDescription" type="text"></label>
+          <label>Valor<input id="expenseValue" type="text" value="R$ 0,00"></label>
+          <label>Responsavel pelo pagamento<select id="expenseResponsible"><option>GIL</option><option>SALES</option><option>GUILHERME</option><option>BASE</option></select></label>
+          <label>Status<select id="expenseStatus"><option value="pendente">pendente</option><option value="pago">pago</option></select></label>
+          <label>Observacao<input id="expenseNote" type="text"></label>
+          <div class="actions"><button class="primary" type="submit">Salvar despesa</button><button id="newExpense" type="button">Nova</button></div>
+        </form>
+        <section class="panel"><div class="panel-head"><h2>Despesas lancadas</h2></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>Categoria</th><th>Descricao</th><th>Valor</th><th>Responsavel</th><th>Status</th><th>Acoes</th></tr></thead><tbody id="expenseRows"></tbody></table></div></section>
+      </div>
+    </section>
+
+    <section id="fechamentos" class="view">
+      <div class="filters"><label>Tipo<select id="closingType"><option value="quinzenal">Quinzenal</option><option value="semanal">Semanal</option></select></label><label>Motoboy<select id="closingRider"></select></label></div>
+      <section class="panel"><div class="panel-head"><h2>Fechamentos dos motoboys</h2><span id="closingMeta" class="muted"></span></div><div class="table-wrap"><table><thead><tr><th>Motoboy</th><th>Período</th><th>ML</th><th>Shopee</th><th>Avulso</th><th>Bruto</th><th>Vales</th><th>Extravios</th><th>Outros descontos</th><th>Bonificações</th><th>Líquido</th><th>Status</th><th>Recibo</th></tr></thead><tbody id="closingRows"></tbody></table></div></section>
+    </section>
+
+    <section id="recibos" class="view">
+      <div class="filters"><label>Motoboy<select id="receiptRider"></select></label><label>Fechamento<select id="receiptClosing"></select></label></div>
+      <section class="panel"><div class="panel-head"><h2>Recibo profissional</h2><div class="actions"><button id="printReceipt" type="button">Imprimir/PDF</button><button id="markPaid" type="button">Marcar como pago</button></div></div><div class="grid two"><label>Quem pagou?<select id="paymentPartner"><option>GIL</option><option>SALES</option><option>GUILHERME</option></select></label><label>Data do pagamento<input id="paymentDate" type="date"></label><label>Valor pago<input id="paymentValue" type="text" value="R$ 0,00"></label><label>Observacao<input id="paymentNote" type="text"></label></div><div id="receiptPreview"></div></section>
+    </section>
+
+    <section id="relatorios" class="view">
+      <div class="grid two"><section class="panel"><div class="panel-head"><h2>Relatório por motoboy</h2></div><div id="riderReport"></div></section><section class="panel"><div class="panel-head"><h2>Relatório por sócio/base</h2></div><div id="partnerReport"></div></section></div>
+      <div class="grid two"><section class="panel"><div class="panel-head"><h2>Fechamento quinzenal das bases</h2></div><div id="baseReport"></div></section><section class="panel"><div class="panel-head"><h2>Relatório de descontos, extravios e vales</h2></div><div id="discountReport"></div></section></div>
+      <section class="panel"><div class="panel-head"><h2>Relatório de lucro</h2></div><div id="profitReport"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Relatório de pendências</h2></div><div id="pendingReport" class="alerts"></div></section>
+    </section>
+
+    <section id="auditoria" class="view"><section class="panel"><div class="panel-head"><h2>Auditoria da importação</h2></div><div id="auditImport"></div></section></section>
+
+    <section id="configuracoes" class="view">
+      <section class="panel form"><div class="panel-head"><h2>Valores padrão</h2></div><label>Mercado Livre<input id="configMl" type="text" value="R$ 8,00"></label><label>Shopee<input id="configShopee" type="text" value="R$ 5,00"></label><label>Avulso<input id="configAvulso" type="text" value="R$ 0,00"></label><div class="actions"><button id="saveConfig" class="primary" type="button">Salvar configurações</button><button id="clearOperational" type="button">Limpar dados operacionais</button></div></section>
+    </section>
+  </main>
+
+  <script src="/workbook-data.js"></script>
+  <script src="/sync-report.js"></script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
