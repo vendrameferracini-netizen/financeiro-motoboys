@@ -109,7 +109,7 @@
         </form>
         <section class="panel"><div class="panel-head"><h2>Entradas lançadas</h2></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Sócio/Base</th><th>ML</th><th>Shopee</th><th>Total pacotes</th><th>Total a pagar</th><th>Ações</th></tr></thead><tbody id="baseRows"></tbody></table></div></section>
       </div>
-      <section class="panel"><div class="panel-head"><h2>Fechamento quinzenal da base</h2></div><div class="table-wrap"><table><thead><tr><th>Sócio/Base</th><th>Período</th><th>ML entrada</th><th>Shopee entrada</th><th>Total pacotes</th><th>Valor ML</th><th>Valor Shopee</th><th>Total a pagar</th><th>Status</th></tr></thead><tbody id="baseClosingRows"></tbody></table></div></section>
+      <section class="panel"><div class="panel-head"><h2>Fechamento quinzenal da base</h2></div><div class="table-wrap"><table><thead><tr><th>Sócio/Base</th><th>Período</th><th>ML entrada</th><th>Shopee entrada</th><th>Total pacotes</th><th>Valor ML</th><th>Valor Shopee</th><th>Total a pagar</th><th>Custos variáveis do período</th><th>Custos a descontar</th><th>Líquido após custos</th><th>Status</th></tr></thead><tbody id="baseClosingRows"></tbody></table></div></section>
     </section>
 
     <section id="lancamentos" class="view">
@@ -170,11 +170,12 @@
           <label>Descricao<input id="expenseDescription" type="text"></label>
           <label>Valor<input id="expenseValue" type="text" value="R$ 0,00"></label>
           <label>Responsavel pelo pagamento<select id="expenseResponsible"><option>GIL</option><option>SALES</option><option>GUILHERME</option><option>BASE</option></select></label>
-          <label>Status<select id="expenseStatus"><option value="pendente">pendente</option><option value="pago">pago</option></select></label>
+          <div class="inline two-cols"><label>Quinzena de origem<input id="expenseOriginPeriod" type="text" readonly></label><label>Quinzena de desconto<select id="expenseDiscountPeriod"></select></label></div>
+          <label>Status<select id="expenseStatus"><option value="pendente">pendente</option><option value="lançado no fechamento">lançado no fechamento</option><option value="pago">pago</option></select></label>
           <label>Observacao<input id="expenseNote" type="text"></label>
           <div class="actions"><button class="primary" type="submit">Salvar despesa</button><button id="newExpense" type="button">Nova</button></div>
         </form>
-        <section class="panel"><div class="panel-head"><h2>Despesas lancadas</h2></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>Categoria</th><th>Descricao</th><th>Valor</th><th>Responsavel</th><th>Status</th><th>Acoes</th></tr></thead><tbody id="expenseRows"></tbody></table></div></section>
+        <section class="panel"><div class="panel-head"><h2>Despesas lancadas</h2></div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>Categoria</th><th>Descricao</th><th>Valor</th><th>Quinzena origem</th><th>Quinzena desconto</th><th>Responsavel</th><th>Status</th><th>Acoes</th></tr></thead><tbody id="expenseRows"></tbody></table></div></section>
       </div>
     </section>
 

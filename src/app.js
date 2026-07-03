@@ -752,6 +752,66 @@ function periodKey(date, type = "quinzenal") {
   return { key: `${start}|${end}`, label: `${first ? "1ª" : "2ª"} quinzena ${m}/${y}`, start, end };
 }
 
+function isoDate(y, m, d) {
+  return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function variableExpenseDiscountPeriod(date) {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return periodKey(date || new Date().toISOString().slice(0, 10));
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  return d.getDate() <= 15 ? periodKey(isoDate(y, m, 16)) : periodKey(isoDate(m === 11 ? y + 1 : y, m === 11 ? 0 : m + 1, 1));
+}
+
+function nextQuinzenalPeriod(period) {
+  if (!period?.start) return variableExpenseDiscountPeriod(new Date().toISOString().slice(0, 10));
+  const d = new Date(`${period.start}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return variableExpenseDiscountPeriod(new Date().toISOString().slice(0, 10));
+  return d.getDate() <= 1 ? periodKey(isoDate(d.getFullYear(), d.getMonth(), 16)) : periodKey(isoDate(d.getMonth() === 11 ? d.getFullYear() + 1 : d.getFullYear(), d.getMonth() === 11 ? 0 : d.getMonth() + 1, 1));
+}
+
+function variableExpensePeriodOptions(date) {
+  const base = variableExpenseDiscountPeriod(date || new Date().toISOString().slice(0, 10));
+  const periods = [periodKey(date || new Date().toISOString().slice(0, 10)), base, nextQuinzenalPeriod(base), nextQuinzenalPeriod(nextQuinzenalPeriod(base))];
+  return uniqueRecords(periods.filter((x) => x.key !== "sem-periodo"), (x) => x.key);
+}
+
+function enrichExpense(row) {
+  const type = row.type || "fixa";
+  if (type !== "variavel") return { ...row, originPeriodKey: "", originPeriodLabel: "", discountPeriodKey: "", discountPeriodLabel: "" };
+  const origin = periodKey(row.date, "quinzenal");
+  const discount = row.discountPeriodKey
+    ? { key: row.discountPeriodKey, label: row.discountPeriodLabel || row.discountPeriodKey.replace("|", " a ") }
+    : variableExpenseDiscountPeriod(row.date);
+  return { ...row, originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discount.key, discountPeriodLabel: discount.label };
+}
+
+function allExpenses() {
+  return (state.expenses || []).map(enrichExpense);
+}
+
+function currentDashboardPeriod() {
+  const selected = $("periodFilter")?.value || "";
+  if (selected) {
+    const [start = "", end = ""] = selected.split("|");
+    return { key: selected, label: selected.replace("|", " a "), start, end };
+  }
+  return periodKey(new Date().toISOString().slice(0, 10), "quinzenal");
+}
+
+function variableExpenseSummary(period = currentDashboardPeriod()) {
+  const rows = allExpenses().filter((x) => x.type === "variavel");
+  const next = nextQuinzenalPeriod(period);
+  return {
+    period,
+    next,
+    periodCosts: sum(rows.filter((x) => x.originPeriodKey === period.key), "value"),
+    currentDiscount: sum(rows.filter((x) => x.discountPeriodKey === period.key), "value"),
+    nextPending: sum(rows.filter((x) => x.discountPeriodKey === next.key && x.status !== "pago"), "value")
+  };
+}
+
 function closingRecords(type = "quinzenal") {
   const groups = new Map();
   const ensure = (rider, date) => {
@@ -777,14 +837,23 @@ function closingRecords(type = "quinzenal") {
 
 function baseClosingRecords() {
   const groups = new Map();
+  const ensure = (partner, period) => {
+    const key = `${partner}|${period.key}`;
+    if (!groups.has(key)) groups.set(key, { id: key, partner, period: period.label, start: period.start, end: period.end, ml: 0, shopee: 0, totalPackages: 0, valueMl: 0, valueShopee: 0, totalPay: 0, variablePeriodCosts: 0, variableDiscounts: 0, netAfterVariable: 0, status: "pendente" });
+    return groups.get(key);
+  };
   allBaseEntries().forEach((x) => {
     const p = periodKey(x.date, "quinzenal");
-    const key = `${x.partner}|${p.key}`;
-    if (!groups.has(key)) groups.set(key, { id: key, partner: x.partner, period: p.label, start: p.start, end: p.end, ml: 0, shopee: 0, totalPackages: 0, valueMl: 0, valueShopee: 0, totalPay: 0, status: "pendente" });
-    const row = groups.get(key);
+    const row = ensure(x.partner, p);
     row.ml += x.ml; row.shopee += x.shopee; row.totalPackages += x.totalPackages; row.valueMl += x.valueMl; row.valueShopee += x.valueShopee; row.totalPay += x.totalPay;
   });
-  return [...groups.values()].map((row) => ({ ...row, status: state.basePaid[row.id] ? "pago" : row.status }));
+  allExpenses().filter((x) => x.type === "variavel").forEach((expense) => {
+    const origin = expense.originPeriodKey ? { key: expense.originPeriodKey, label: expense.originPeriodLabel || expense.originPeriodKey.replace("|", " a "), start: expense.originPeriodKey.split("|")[0] || "", end: expense.originPeriodKey.split("|")[1] || "" } : null;
+    const discount = expense.discountPeriodKey ? { key: expense.discountPeriodKey, label: expense.discountPeriodLabel || expense.discountPeriodKey.replace("|", " a "), start: expense.discountPeriodKey.split("|")[0] || "", end: expense.discountPeriodKey.split("|")[1] || "" } : null;
+    if (origin) ensure("BASE", origin).variablePeriodCosts += Number(expense.value || 0);
+    if (discount) ensure("BASE", discount).variableDiscounts += Number(expense.value || 0);
+  });
+  return [...groups.values()].map((row) => ({ ...row, netAfterVariable: row.totalPay - row.variableDiscounts, status: state.basePaid[row.id] ? "pago" : row.status }));
 }
 
 function profitReportRows() {
@@ -839,8 +908,10 @@ function dashboardTotals() {
   const closings = filteredClosings();
   const bases = baseClosingRecords();
   const profits = profitTotals();
-  const fixedExpenses = sum((state.expenses || []).filter((x) => x.type === "fixa"), "value");
-  const variableExpenses = sum((state.expenses || []).filter((x) => x.type === "variavel"), "value");
+  const expenses = allExpenses();
+  const fixedExpenses = sum(expenses.filter((x) => x.type === "fixa"), "value");
+  const variableExpenses = sum(expenses.filter((x) => x.type === "variavel"), "value");
+  const variableSummary = variableExpenseSummary();
   const totalExpenses = fixedExpenses + variableExpenses;
   const baseMl = bases.reduce((s, x) => s + x.ml, 0);
   const baseShopee = bases.reduce((s, x) => s + x.shopee, 0);
@@ -866,6 +937,9 @@ function dashboardTotals() {
     pending: closings.filter((x) => x.status !== "pago").reduce((s, x) => s + x.net, 0),
     fixedExpenses,
     variableExpenses,
+    variablePeriodCosts: variableSummary.periodCosts,
+    variableCurrentDiscount: variableSummary.currentDiscount,
+    variableNextPending: variableSummary.nextPending,
     totalExpenses,
     noCollectionProfit: profits.noCollectionProfit,
     freelancerProfit: profits.freelancerProfit,
@@ -992,6 +1066,12 @@ function renderOptions() {
   ["dailyRider", "discountRider", "receiptRider"].forEach((id) => $(id).innerHTML = riders);
   $("closingRider").innerHTML = `<option value="">Todos</option>${riders}`;
   $("periodFilter").innerHTML = `<option value="">Todos os períodos</option>${[...new Set(closingRecords().map((c) => `${c.start}|${c.end}`))].map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p.replace("|", " a "))}</option>`).join("")}`;
+  const periodOptions = [
+    ...closingRecords().map((c) => `${c.start}|${c.end}`),
+    ...baseClosingRecords().map((c) => `${c.start}|${c.end}`),
+    ...allExpenses().flatMap((x) => [x.originPeriodKey, x.discountPeriodKey])
+  ].filter(Boolean);
+  $("periodFilter").innerHTML = `<option value="">Todos os periodos</option>${[...new Set(periodOptions)].map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p.replace("|", " a "))}</option>`).join("")}`;
   if ([...$("periodFilter").options].some((option) => option.value === currentPeriod)) $("periodFilter").value = currentPeriod;
 }
 
@@ -1023,6 +1103,9 @@ function renderDashboardV2() {
       card("Entrada de pacotes", num(t.basePackages)),
       card("Despesas fixas", money(t.fixedExpenses)),
       card("Despesas variáveis", money(t.variableExpenses)),
+      card("Custos variáveis do período", money(t.variablePeriodCosts)),
+      card("Custos variáveis a descontar", money(t.variableCurrentDiscount)),
+      card("Custos pendentes próxima quinzena", money(t.variableNextPending)),
       card("Lucro motoboys sem coleta", money(t.noCollectionProfit)),
       card("Lucro freelancers", money(t.freelancerProfit)),
       card("Lucro total sem coleta + freelancers", money(t.profitTotal)),
@@ -1049,6 +1132,9 @@ function renderDashboardV2() {
       ["Líquido a pagar aos motoboys", money(t.net)],
       ["Despesas fixas", money(t.fixedExpenses)],
       ["Despesas variáveis", money(t.variableExpenses)],
+      ["Custos variáveis do período", money(t.variablePeriodCosts)],
+      ["Custos variáveis a descontar na quinzena atual", money(t.variableCurrentDiscount)],
+      ["Custos variáveis pendentes para próxima quinzena", money(t.variableNextPending)],
       ["Total de despesas", money(t.totalExpenses)],
       ["Resultado final", money(t.finalResult)]
     ]);
@@ -1189,7 +1275,7 @@ function tableBlock(title, headers, rows) {
 function renderBase() {
   updateBaseTotals();
   $("baseRows").innerHTML = allBaseEntries().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${x.partner}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.totalPay)}</td><td>${x.source === "manual" ? `<button data-remove-base="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
-  $("baseClosingRows").innerHTML = baseClosingRecords().map((x) => `<tr><td>${x.partner}</td><td>${x.period}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.valueMl)}</td><td>${money(x.valueShopee)}</td><td>${money(x.totalPay)}</td><td>${x.status}</td></tr>`).join("");
+  $("baseClosingRows").innerHTML = baseClosingRecords().map((x) => `<tr><td>${x.partner}</td><td>${x.period}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.valueMl)}</td><td>${money(x.valueShopee)}</td><td>${money(x.totalPay)}</td><td>${money(x.variablePeriodCosts)}</td><td>${money(x.variableDiscounts)}</td><td>${money(x.netAfterVariable)}</td><td>${x.status}</td></tr>`).join("");
 }
 
 function renderDaily() { updateDailyGross(); $("dailyRows").innerHTML = allDaily().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider)}</td><td>${workTypeBadge(dailyTypeFor(x))}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.avulso)}</td><td>${money(x.gross)}</td><td>${x.source === "manual" ? `<button data-remove-daily="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join(""); }
@@ -1198,9 +1284,31 @@ function renderDiscounts() {
   if ($("baseDiscountRows")) $("baseDiscountRows").innerHTML = allDiscounts().filter((x) => (x.partner || "BASE") === "BASE").map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider || "")}</td><td>${escapeHtml(x.type)}</td><td>${money(x.value)}</td><td>${escapeHtml(x.reason || "")}</td><td>${escapeHtml(x.observation || x.note || "")}</td><td>${x.source === "manual" ? `<button data-edit-discount="${escapeHtml(x.id)}">Editar</button> <button data-remove-discount="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
 }
 
+function updateExpensePeriodFields(forceCalculated = false) {
+  if (!$("expenseOriginPeriod") || !$("expenseDiscountPeriod")) return;
+  const isVariable = $("expenseType").value === "variavel";
+  if (!isVariable) {
+    $("expenseOriginPeriod").value = "Nao se aplica";
+    $("expenseDiscountPeriod").innerHTML = `<option value="">Nao se aplica</option>`;
+    $("expenseDiscountPeriod").disabled = true;
+    return;
+  }
+  const date = $("expenseDate").value || new Date().toISOString().slice(0, 10);
+  const origin = periodKey(date, "quinzenal");
+  const calculated = variableExpenseDiscountPeriod(date);
+  const current = forceCalculated ? calculated.key : ($("expenseDiscountPeriod").value || calculated.key);
+  $("expenseOriginPeriod").value = origin.label;
+  $("expenseDiscountPeriod").disabled = false;
+  const options = variableExpensePeriodOptions(date);
+  if (!options.some((x) => x.key === current)) options.unshift({ key: current, label: current.replace("|", " a "), start: "", end: "" });
+  $("expenseDiscountPeriod").innerHTML = options.map((x) => `<option value="${escapeHtml(x.key)}">${escapeHtml(x.label)}</option>`).join("");
+  $("expenseDiscountPeriod").value = current;
+}
+
 function renderExpenses() {
   if (!$("expenseRows")) return;
-  $("expenseRows").innerHTML = (state.expenses || []).map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.type)}</td><td>${escapeHtml(x.category)}</td><td>${escapeHtml(x.description || "")}</td><td>${money(x.value)}</td><td>${escapeHtml(x.responsible || "")}</td><td>${escapeHtml(x.status || "pendente")}</td><td><button data-edit-expense="${escapeHtml(x.id)}">Editar</button> <button data-remove-expense="${escapeHtml(x.id)}">Remover</button></td></tr>`).join("");
+  updateExpensePeriodFields();
+  $("expenseRows").innerHTML = allExpenses().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.type)}</td><td>${escapeHtml(x.category)}</td><td>${escapeHtml(x.description || "")}</td><td>${money(x.value)}</td><td>${escapeHtml(x.originPeriodLabel || "-")}</td><td>${escapeHtml(x.discountPeriodLabel || "-")}</td><td>${escapeHtml(x.responsible || "")}</td><td>${escapeHtml(x.status || "pendente")}</td><td><button data-edit-expense="${escapeHtml(x.id)}">Editar</button> <button data-remove-expense="${escapeHtml(x.id)}">Remover</button></td></tr>`).join("");
 }
 
 function renderClosings() {
@@ -1228,7 +1336,7 @@ function renderReports() {
   const t = dashboardTotals();
   $("riderReport").innerHTML = allRiders().map((r) => `<p><strong>${escapeHtml(r.name)} ${workTypeBadge(r.collection)}</strong>: ${money(closingRecords().filter((x) => normalize(x.rider) === normalize(r.name)).reduce((s, x) => s + x.net, 0))}</p>`).join("");
   $("partnerReport").innerHTML = RESPONSIBLES.map((p) => `<p><strong>${p}</strong>: base ${money(partnerBaseTotal(p))}, descontos ${money(sum(allDiscounts().filter((x) => (x.partner || "BASE") === p), "value"))}</p>`).join("");
-  $("baseReport").innerHTML = tableBlock("Bases", ["Sócio","Período","ML","Shopee","Total pagar"], baseClosingRecords().map((x) => [x.partner, x.period, num(x.ml), num(x.shopee), money(x.totalPay)]));
+  $("baseReport").innerHTML = tableBlock("Bases", ["Sócio","Período","ML","Shopee","Total pagar","Custos variáveis","Líquido após custos"], baseClosingRecords().map((x) => [x.partner, x.period, num(x.ml), num(x.shopee), money(x.totalPay), money(x.variableDiscounts), money(x.netAfterVariable)]));
   $("discountReport").innerHTML = `<p>Vales: ${money(sum(discountsByType("Vale"), "value"))}</p><p>Extravios/Ocorrências: ${money(allDiscounts().filter((x) => normalize(x.type).includes("extravio") || normalize(x.type).includes("ocorrencia")).reduce((s, x) => s + x.value, 0))}</p><p>Outros: ${money(allDiscounts().filter((x) => !normalize(x.type).includes("vale") && !normalize(x.type).includes("extravio") && !normalize(x.type).includes("ocorrencia")).reduce((s, x) => s + x.value, 0))}</p>`;
   $("discountReport").innerHTML += `<p>Despesas fixas: ${money(t.fixedExpenses)}</p><p>Despesas variáveis: ${money(t.variableExpenses)}</p><p>Resultado final: ${money(t.finalResult)}</p>`;
   if ($("profitReport")) $("profitReport").innerHTML = `<div class="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>ML entregues</th><th>Shopee entregues</th><th>Valor recebido da base</th><th>Valor pago</th><th>Lucro ML</th><th>Lucro Shopee</th><th>Lucro total</th></tr></thead><tbody>${profitReportRows().map((x) => `<tr><td>${escapeHtml(x.name)}</td><td>${workTypeBadge(x.type)}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${money(x.baseReceived)}</td><td>${money(x.paid)}</td><td>${money(x.profitMl)}</td><td>${money(x.profitShopee)}</td><td>${money(x.profit)}</td></tr>`).join("") || `<tr><td colspan="9" class="empty">Sem registros de lucro.</td></tr>`}</tbody></table></div>`;
@@ -1550,7 +1658,14 @@ function clearRiderForm() {
   showRiderFeedback("Formulário pronto para novo motoboy.", "ok");
 }
 function clearDiscountForm() { editingDiscountId = ""; ["discountDate","discountCode","discountReason","discountNote"].forEach((id) => $(id).value = ""); $("discountValue").value = money(0); }
-function clearExpenseForm() { editingExpenseId = ""; ["expenseId","expenseDate","expenseCategory","expenseDescription","expenseNote"].forEach((id) => $(id).value = ""); $("expenseValue").value = money(0); $("expenseStatus").value = "pendente"; }
+function clearExpenseForm() {
+  editingExpenseId = "";
+  ["expenseId","expenseDate","expenseCategory","expenseDescription","expenseNote"].forEach((id) => $(id).value = "");
+  $("expenseType").value = "fixa";
+  $("expenseValue").value = money(0);
+  $("expenseStatus").value = "pendente";
+  updateExpensePeriodFields();
+}
 
 function validations() {
   const issues = [];
@@ -1590,7 +1705,7 @@ function updateBaseTotals() {
   $("baseTotalPackages").value = num(row.totalPackages); $("baseValueMl").value = money(row.valueMl); $("baseValueShopee").value = money(row.valueShopee); $("baseTotalPay").value = money(row.totalPay);
 }
 function updateDailyGross() { $("dailyGross").value = money(Number($("dailyMl").value || 0) * parseMoney($("dailyRateMl").value) + Number($("dailyShopee").value || 0) * parseMoney($("dailyRateShopee").value) + Number($("dailyAvulso").value || 0) * parseMoney($("dailyRateAvulso").value)); }
-function fillDefaults() { const today = new Date().toISOString().slice(0, 10); ["baseDate", "dailyDate", "discountDate", "expenseDate", "paymentDate"].forEach((id) => { if ($(id)) $(id).value = today; }); setDailyType("com coleta"); updateBaseTotals(); updateDailyGross(); }
+function fillDefaults() { const today = new Date().toISOString().slice(0, 10); ["baseDate", "dailyDate", "discountDate", "expenseDate", "paymentDate"].forEach((id) => { if ($(id)) $(id).value = today; }); setDailyType("com coleta"); updateBaseTotals(); updateDailyGross(); updateExpensePeriodFields(); }
 
 function switchView(id) { document.querySelectorAll(".nav-item, .view").forEach((el) => el.classList.remove("active")); document.querySelector(`.nav-item[data-view="${id}"]`)?.classList.add("active"); $(id)?.classList.add("active"); $("viewTitle").textContent = document.querySelector(`.nav-item[data-view="${id}"]`)?.textContent || "Dashboard"; }
 function addMoneyBlur(ids) { ids.forEach((id) => $(id).addEventListener("blur", () => { $(id).value = money(parseMoney($(id).value)); updateDailyGross(); })); }
@@ -1672,7 +1787,11 @@ function bindEvents() {
   $("expenseForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const id = editingExpenseId || uid("expense");
-    const row = { id, kind: "despesa", date: $("expenseDate").value, type: $("expenseType").value, category: $("expenseCategory").value.trim(), description: $("expenseDescription").value.trim(), value: parseMoney($("expenseValue").value), responsible: $("expenseResponsible").value, status: $("expenseStatus").value, note: $("expenseNote").value.trim(), source: "manual" };
+    const type = $("expenseType").value;
+    const origin = type === "variavel" ? periodKey($("expenseDate").value, "quinzenal") : { key: "", label: "" };
+    const discountOption = $("expenseDiscountPeriod").selectedOptions[0];
+    const discountKey = type === "variavel" ? $("expenseDiscountPeriod").value : "";
+    const row = { id, kind: "despesa", date: $("expenseDate").value, type, category: $("expenseCategory").value.trim(), description: $("expenseDescription").value.trim(), value: parseMoney($("expenseValue").value), responsible: $("expenseResponsible").value, originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discountKey, discountPeriodLabel: type === "variavel" ? (discountOption?.textContent || discountKey.replace("|", " a ")) : "", status: $("expenseStatus").value, note: $("expenseNote").value.trim(), source: "manual" };
     if (!confirmDuplicate(state.expenses, row, editingExpenseId)) return;
     const idx = state.expenses.findIndex((x) => x.id === id);
     if (idx >= 0) state.expenses[idx] = row; else state.expenses.unshift(row);
@@ -1680,6 +1799,8 @@ function bindEvents() {
     saveState("Despesa", `${row.type} ${row.category}`);
     renderAll();
   });
+  $("expenseType")?.addEventListener("change", () => updateExpensePeriodFields(true));
+  $("expenseDate")?.addEventListener("change", () => updateExpensePeriodFields(true));
   $("newExpense")?.addEventListener("click", clearExpenseForm);
   $("expenseRows")?.addEventListener("click", (e) => {
     const edit = e.target.closest("button[data-edit-expense]");
@@ -1697,6 +1818,13 @@ function bindEvents() {
       $("expenseResponsible").value = row.responsible || "BASE";
       $("expenseStatus").value = row.status || "pendente";
       $("expenseNote").value = row.note || "";
+      updateExpensePeriodFields();
+      if (row.discountPeriodKey) {
+        if (![...$("expenseDiscountPeriod").options].some((option) => option.value === row.discountPeriodKey)) {
+          $("expenseDiscountPeriod").insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(row.discountPeriodKey)}">${escapeHtml(row.discountPeriodLabel || row.discountPeriodKey.replace("|", " a "))}</option>`);
+        }
+        $("expenseDiscountPeriod").value = row.discountPeriodKey;
+      }
     }
     if (remove) {
       const row = state.expenses.find((x) => x.id === remove.dataset.removeExpense);
