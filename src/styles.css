@@ -52,6 +52,7 @@ h3 { font-size: 14px; margin-bottom: 10px; }
   height: 100vh;
   overflow: auto;
 }
+.mobile-menu-toggle, .mobile-menu-backdrop { display: none; }
 .brand { display: grid; gap: 2px; padding: 8px 8px 18px; }
 .brand span { color: #9fb0bd; font-size: 12px; text-transform: uppercase; font-weight: 800; }
 .brand strong { font-size: 22px; }
@@ -257,10 +258,49 @@ th { color: var(--muted); background: #fbfcfd; font-size: 12px; text-transform: 
 
 @media (max-width: 1100px) {
   body { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; }
-  .main-nav { grid-template-columns: repeat(2, 1fr); }
-  .topbar { flex-direction: column; align-items: stretch; }
+  body.mobile-menu-open { overflow: hidden; }
+  .mobile-menu-toggle {
+    display: inline-flex;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 80;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    height: 40px;
+    padding: 0 14px;
+    background: #101b22;
+    color: white;
+    border-color: rgba(255,255,255,.18);
+    box-shadow: 0 8px 18px rgba(16, 24, 40, .18);
+  }
+  .mobile-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: block;
+    background: rgba(16, 27, 34, .42);
+  }
+  .mobile-menu-backdrop[hidden] { display: none; }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 70;
+    width: min(82vw, 310px);
+    height: 100dvh;
+    transform: translateX(-105%);
+    transition: transform 220ms ease;
+    box-shadow: 18px 0 34px rgba(16, 24, 40, .24);
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sidebar.is-open { transform: translateX(0); }
+  .main-nav { grid-template-columns: 1fr; }
+  .nav-item { min-height: 44px; touch-action: manipulation; }
+  .topbar { flex-direction: column; align-items: stretch; padding-top: 64px; }
   .top-actions { min-width: 0; grid-template-columns: 1fr; }
+  .view { padding: 16px; }
   .cards, .summary-grid, .two, .form-grid, .motoboy-layout, .inline.three, .partner-strip, .filters, .work-type-cards { grid-template-columns: 1fr; }
 }
 

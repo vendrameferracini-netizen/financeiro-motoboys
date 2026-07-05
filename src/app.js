@@ -43,6 +43,7 @@ let supabaseProfile = null;
 let supabaseOnline = false;
 let lastSupabaseSync = "";
 let localStateForMigration = null;
+let lastMobileNavTouchAt = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -1834,7 +1835,29 @@ function updateBaseTotals() {
 function updateDailyGross() { $("dailyGross").value = money(Number($("dailyMl").value || 0) * parseMoney($("dailyRateMl").value) + Number($("dailyShopee").value || 0) * parseMoney($("dailyRateShopee").value) + Number($("dailyAvulso").value || 0) * parseMoney($("dailyRateAvulso").value)); }
 function fillDefaults() { const today = new Date().toISOString().slice(0, 10); ["baseDate", "dailyDate", "discountDate", "expenseDate", "paymentDate"].forEach((id) => { if ($(id)) $(id).value = today; }); setDailyType("com coleta"); updateBaseTotals(); updateDailyGross(); updateExpensePeriodFields(); }
 
-function switchView(id) { document.querySelectorAll(".nav-item, .view").forEach((el) => el.classList.remove("active")); document.querySelector(`.nav-item[data-view="${id}"]`)?.classList.add("active"); $(id)?.classList.add("active"); $("viewTitle").textContent = document.querySelector(`.nav-item[data-view="${id}"]`)?.textContent || "Dashboard"; }
+function setMobileMenu(open) {
+  const sidebar = $("sidebar");
+  const toggle = $("mobileMenuToggle");
+  const backdrop = $("mobileMenuBackdrop");
+  document.body.classList.toggle("mobile-menu-open", Boolean(open));
+  sidebar?.classList.toggle("is-open", Boolean(open));
+  if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  if (backdrop) backdrop.hidden = !open;
+}
+
+function closeMobileMenu() {
+  setMobileMenu(false);
+}
+
+function switchView(id) {
+  document.querySelectorAll(".nav-item, .view").forEach((el) => el.classList.remove("active"));
+  const nav = document.querySelector(`.nav-item[data-view="${id}"]`);
+  nav?.classList.add("active");
+  $(id)?.classList.add("active");
+  $("viewTitle").textContent = nav?.textContent || "Dashboard";
+  closeMobileMenu();
+  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+}
 function addMoneyBlur(ids) { ids.forEach((id) => $(id).addEventListener("blur", () => { $(id).value = money(parseMoney($(id).value)); updateDailyGross(); })); }
 
 function showAuthGate(show, message = "") {
@@ -1931,7 +1954,26 @@ function bindEvents() {
       $("loginFeedback").textContent = error.message || "Falha ao entrar.";
     }
   });
-  document.querySelectorAll(".nav-item").forEach((btn) => btn.addEventListener("click", () => switchView(btn.dataset.view)));
+  const activateNav = (btn) => {
+    if (!btn?.dataset?.view) return;
+    switchView(btn.dataset.view);
+  };
+  document.querySelectorAll(".nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (Date.now() - lastMobileNavTouchAt < 450) return;
+      activateNav(btn);
+    });
+    btn.addEventListener("touchend", (event) => {
+      event.preventDefault();
+      lastMobileNavTouchAt = Date.now();
+      activateNav(btn);
+    }, { passive: false });
+  });
+  $("mobileMenuToggle")?.addEventListener("click", () => setMobileMenu(!$("sidebar")?.classList.contains("is-open")));
+  $("mobileMenuBackdrop")?.addEventListener("click", closeMobileMenu);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMobileMenu();
+  });
   ["quickSearch", "periodFilter", "statusFilter"].forEach((id) => $(id).addEventListener("input", renderAll));
   ["baseMl", "baseShopee"].forEach((id) => $(id).addEventListener("input", updateBaseTotals));
   ["dailyMl", "dailyShopee", "dailyAvulso", "dailyRateMl", "dailyRateShopee", "dailyRateAvulso"].forEach((id) => $(id).addEventListener("input", updateDailyGross));
