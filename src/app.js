@@ -658,6 +658,12 @@ function partnerProfileDiscounts(partner) {
   if (partner !== "GUILHERME") return allDiscounts().filter((x) => (x.partner || "BASE") === partner);
   return guilhermeProfileAudit().validRows;
 }
+function variableExpensesByResponsible(responsible) {
+  return allExpenses().filter((x) => x.type === "variavel" && (x.responsible || "BASE") === responsible);
+}
+function variableExpenseTotal(responsible) {
+  return sum(variableExpensesByResponsible(responsible), "value");
+}
 function guilhermeProfileAuditTableRows() {
   return guilhermeProfileAudit().rows.map((x) => [
     x.lineOriginal || "",
@@ -839,7 +845,7 @@ function baseClosingRecords() {
   const groups = new Map();
   const ensure = (partner, period) => {
     const key = `${partner}|${period.key}`;
-    if (!groups.has(key)) groups.set(key, { id: key, partner, period: period.label, start: period.start, end: period.end, ml: 0, shopee: 0, totalPackages: 0, valueMl: 0, valueShopee: 0, totalPay: 0, variablePeriodCosts: 0, variableDiscounts: 0, netAfterVariable: 0, status: "pendente" });
+    if (!groups.has(key)) groups.set(key, { id: key, partner, period: period.label, start: period.start, end: period.end, ml: 0, shopee: 0, totalPackages: 0, valueMl: 0, valueShopee: 0, totalPay: 0, managerDiscounts: 0, variablePeriodCosts: 0, variableDiscounts: 0, netAfterVariable: 0, status: "pendente" });
     return groups.get(key);
   };
   allBaseEntries().forEach((x) => {
@@ -847,13 +853,19 @@ function baseClosingRecords() {
     const row = ensure(x.partner, p);
     row.ml += x.ml; row.shopee += x.shopee; row.totalPackages += x.totalPackages; row.valueMl += x.valueMl; row.valueShopee += x.valueShopee; row.totalPay += x.totalPay;
   });
+  allDiscounts().forEach((discount) => {
+    const responsible = discount.partner || "BASE";
+    const p = periodKey(discount.date, "quinzenal");
+    ensure(responsible, p).managerDiscounts += Number(discount.value || 0);
+  });
   allExpenses().filter((x) => x.type === "variavel").forEach((expense) => {
+    const responsible = RESPONSIBLES.includes(expense.responsible) ? expense.responsible : "BASE";
     const origin = expense.originPeriodKey ? { key: expense.originPeriodKey, label: expense.originPeriodLabel || expense.originPeriodKey.replace("|", " a "), start: expense.originPeriodKey.split("|")[0] || "", end: expense.originPeriodKey.split("|")[1] || "" } : null;
     const discount = expense.discountPeriodKey ? { key: expense.discountPeriodKey, label: expense.discountPeriodLabel || expense.discountPeriodKey.replace("|", " a "), start: expense.discountPeriodKey.split("|")[0] || "", end: expense.discountPeriodKey.split("|")[1] || "" } : null;
-    if (origin) ensure("BASE", origin).variablePeriodCosts += Number(expense.value || 0);
-    if (discount) ensure("BASE", discount).variableDiscounts += Number(expense.value || 0);
+    if (origin) ensure(responsible, origin).variablePeriodCosts += Number(expense.value || 0);
+    if (discount) ensure(responsible, discount).variableDiscounts += Number(expense.value || 0);
   });
-  return [...groups.values()].map((row) => ({ ...row, netAfterVariable: row.totalPay - row.variableDiscounts, status: state.basePaid[row.id] ? "pago" : row.status }));
+  return [...groups.values()].map((row) => ({ ...row, netAfterVariable: row.totalPay - row.managerDiscounts - row.variableDiscounts, status: state.basePaid[row.id] ? "pago" : row.status }));
 }
 
 function profitReportRows() {
@@ -980,7 +992,8 @@ function appFinancialTotals() {
     const entry = sum(base.filter((x) => x.partner === p), "totalPay");
     const delivered = managerDeliveredValue(p);
     const discounts = managerDiscounts[p] || 0;
-    acc[p] = entry - delivered - discounts;
+    const variable = variableExpenseTotal(p);
+    acc[p] = entry - delivered - discounts - variable;
     return acc;
   }, {});
   const payBase = Object.values(managerBalances).reduce((s, x) => s + x, 0);
@@ -1023,12 +1036,13 @@ function officialComparisons() {
     const appEntry = sum(managerBase, "totalPay");
     const appDelivered = managerDeliveredValue(name);
     const appDiscounts = effectiveManagerDiscount(name);
-    const appBalance = appEntry - appDelivered - appDiscounts;
+    const appVariable = variableExpenseTotal(name);
+    const appBalance = appEntry - appDelivered - appDiscounts - appVariable;
     comparisons.push({ label: `${name} pacotes`, app: appPackages, sheet: row.packages, origin: row.origin, format: "num", reason: "Soma das entradas do gestor." });
     comparisons.push({ label: `${name} valor entrada`, app: appEntry, sheet: row.entryValue, origin: row.origin, format: "money", reason: "ML x R$ 8,00 + Shopee x R$ 5,00." });
     comparisons.push({ label: `${name} valor entregue`, app: appDelivered, sheet: row.deliveredValue, origin: row.origin, format: "money", reason: "Soma de TOTAL DIA na seção ENTREGAS do gestor." });
     comparisons.push({ label: `${name} descontos`, app: appDiscounts, sheet: row.discounts, origin: row.origin, format: "money", reason: "Soma dos itens reais dos blocos CONTROLE DE DESCONTO." });
-    comparisons.push({ label: `${name} saldo gestor`, app: appBalance, sheet: row.balance, origin: row.origin, format: "money", reason: "Valor entrada - valor entregue - descontos." });
+    comparisons.push({ label: `${name} saldo gestor`, app: appBalance, sheet: row.balance, origin: row.origin, format: "money", reason: "Valor entrada - valor entregue - descontos - despesas variaveis." });
   });
   return comparisons;
 }
@@ -1122,10 +1136,11 @@ function renderDashboardV2() {
       ["Folha bruta", money(t.gross)],
       ["Total líquido", money(t.net)]
     ]);
-    $("managerControl").innerHTML = tableBlock("Controle por Gestor", ["Gestor","Entrada pacotes","Valor entrada","Descontos/vales","Saldo gestor"], RESPONSIBLES.map((name) => {
+    $("managerControl").innerHTML = tableBlock("Controle por Gestor", ["Gestor","Entrada pacotes","Valor entrada","Descontos/vales","Despesas variáveis","Saldo gestor"], RESPONSIBLES.map((name) => {
       const bases = allBaseEntries().filter((x) => (x.partner || "BASE") === name);
       const discounts = allDiscounts().filter((x) => (x.partner || "BASE") === name);
-      return [name, num(sum(bases, "totalPackages")), money(sum(bases, "totalPay")), money(sum(discounts, "value")), money(sum(bases, "totalPay") - sum(discounts, "value"))];
+      const variable = variableExpenseTotal(name);
+      return [name, num(sum(bases, "totalPackages")), money(sum(bases, "totalPay")), money(sum(discounts, "value")), money(variable), money(sum(bases, "totalPay") - sum(discounts, "value") - variable)];
     }));
     $("cashSummary").innerHTML = tableBlock("Resumo de Caixa", ["Descrição","Valor"], [
       ["Entrada da base", money(t.basePay)],
@@ -1263,9 +1278,11 @@ function renderPartnerProfile(partner) {
   $("partnerProfileTitle").textContent = `Ficha do socio - ${partner}`;
   const base = allBaseEntries().filter((x) => x.partner === partner);
   const discounts = partnerProfileDiscounts(partner);
+  const variableExpenses = variableExpensesByResponsible(partner);
   const closings = baseClosingRecords().filter((x) => x.partner === partner);
   const auditHtml = partner === "GUILHERME" ? guilhermeProfileAuditHtml() : "";
-  $("partnerProfile").innerHTML = `<div class="profile"><div class="summary-grid">${card("ML entrada", num(sum(base, "ml")))}${card("Shopee entrada", num(sum(base, "shopee")))}${card("Pacotes entrada", num(sum(base, "totalPackages")))}${card("A pagar base", money(sum(base, "totalPay")))}${card("Descontos lancados", money(sum(discounts, "value")))}</div>${tableBlock("Entrada de Pacotes da Base", ["Data","ML","Shopee","Total pacotes","Total a pagar"], base.map((x) => [displayDate(x.date), num(x.ml), num(x.shopee), num(x.totalPackages), money(x.totalPay)]))}${tableBlock("Controle de Descontos", ["Data","Motoboy","Tipo","Valor","Motivo"], discounts.map((x) => [displayDate(x.date), x.rider, x.type, money(x.value), x.reason]))}${auditHtml}${tableBlock("Fechamento Quinzenal da Base", ["Periodo","ML","Shopee","Pacotes","Total a pagar","Status"], closings.map((x) => [x.period, num(x.ml), num(x.shopee), num(x.totalPackages), money(x.totalPay), x.status]))}</div>`;
+  const partnerBalance = sum(base, "totalPay") - sum(discounts, "value") - sum(variableExpenses, "value");
+  $("partnerProfile").innerHTML = `<div class="profile"><div class="summary-grid">${card("ML entrada", num(sum(base, "ml")))}${card("Shopee entrada", num(sum(base, "shopee")))}${card("Pacotes entrada", num(sum(base, "totalPackages")))}${card("A pagar base", money(sum(base, "totalPay")))}${card("Descontos lancados", money(sum(discounts, "value")))}${card("Despesas variaveis", money(sum(variableExpenses, "value")))}${card("Saldo do socio", money(partnerBalance))}</div>${tableBlock("Entrada de Pacotes da Base", ["Data","ML","Shopee","Total pacotes","Total a pagar"], base.map((x) => [displayDate(x.date), num(x.ml), num(x.shopee), num(x.totalPackages), money(x.totalPay)]))}${tableBlock("Controle de Descontos", ["Data","Motoboy","Tipo","Valor","Motivo"], discounts.map((x) => [displayDate(x.date), x.rider, x.type, money(x.value), x.reason]))}${tableBlock("Despesas variaveis", ["Data","Categoria","Descricao","Valor","Quinzena origem","Quinzena desconto","Status","Observacao"], variableExpenses.map((x) => [displayDate(x.date), x.category, x.description || "", money(x.value), x.originPeriodLabel || "", x.discountPeriodLabel || "", x.status || "pendente", x.note || ""]))}${auditHtml}${tableBlock("Fechamento Quinzenal da Base", ["Periodo","ML","Shopee","Pacotes","Total a pagar","Descontos","Desp. variaveis","Saldo","Status"], closings.map((x) => [x.period, num(x.ml), num(x.shopee), num(x.totalPackages), money(x.totalPay), money(x.managerDiscounts), money(x.variableDiscounts), money(x.netAfterVariable), x.status]))}</div>`;
 }
 
 function tableBlock(title, headers, rows) {
@@ -1275,7 +1292,7 @@ function tableBlock(title, headers, rows) {
 function renderBase() {
   updateBaseTotals();
   $("baseRows").innerHTML = allBaseEntries().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${x.partner}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.totalPay)}</td><td>${x.source === "manual" ? `<button data-remove-base="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
-  $("baseClosingRows").innerHTML = baseClosingRecords().map((x) => `<tr><td>${x.partner}</td><td>${x.period}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.valueMl)}</td><td>${money(x.valueShopee)}</td><td>${money(x.totalPay)}</td><td>${money(x.variablePeriodCosts)}</td><td>${money(x.variableDiscounts)}</td><td>${money(x.netAfterVariable)}</td><td>${x.status}</td></tr>`).join("");
+  $("baseClosingRows").innerHTML = baseClosingRecords().map((x) => `<tr><td>${x.partner}</td><td>${x.period}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.valueMl)}</td><td>${money(x.valueShopee)}</td><td>${money(x.totalPay)}</td><td>${money(x.managerDiscounts)}</td><td>${money(x.variablePeriodCosts)}</td><td>${money(x.variableDiscounts)}</td><td>${money(x.netAfterVariable)}</td><td>${x.status}</td></tr>`).join("");
 }
 
 function renderDaily() { updateDailyGross(); $("dailyRows").innerHTML = allDaily().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider)}</td><td>${workTypeBadge(dailyTypeFor(x))}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.avulso)}</td><td>${money(x.gross)}</td><td>${x.source === "manual" ? `<button data-remove-daily="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join(""); }
@@ -1309,6 +1326,7 @@ function renderExpenses() {
   if (!$("expenseRows")) return;
   updateExpensePeriodFields();
   $("expenseRows").innerHTML = allExpenses().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.type)}</td><td>${escapeHtml(x.category)}</td><td>${escapeHtml(x.description || "")}</td><td>${money(x.value)}</td><td>${escapeHtml(x.originPeriodLabel || "-")}</td><td>${escapeHtml(x.discountPeriodLabel || "-")}</td><td>${escapeHtml(x.responsible || "")}</td><td>${escapeHtml(x.status || "pendente")}</td><td><button data-edit-expense="${escapeHtml(x.id)}">Editar</button> <button data-remove-expense="${escapeHtml(x.id)}">Remover</button></td></tr>`).join("");
+  if ($("variableExpenseRows")) $("variableExpenseRows").innerHTML = allExpenses().filter((x) => x.type === "variavel").map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.responsible || "BASE")}</td><td>${escapeHtml(x.category)}</td><td>${escapeHtml(x.description || "")}</td><td>${money(x.value)}</td><td>${escapeHtml(x.discountPeriodLabel || "")}</td><td>${escapeHtml(x.status || "pendente")}</td><td>${escapeHtml(x.note || "")}</td></tr>`).join("") || `<tr><td colspan="8" class="empty">Sem despesas variáveis.</td></tr>`;
 }
 
 function renderClosings() {
@@ -1335,8 +1353,8 @@ function receiptHtml(c) {
 function renderReports() {
   const t = dashboardTotals();
   $("riderReport").innerHTML = allRiders().map((r) => `<p><strong>${escapeHtml(r.name)} ${workTypeBadge(r.collection)}</strong>: ${money(closingRecords().filter((x) => normalize(x.rider) === normalize(r.name)).reduce((s, x) => s + x.net, 0))}</p>`).join("");
-  $("partnerReport").innerHTML = RESPONSIBLES.map((p) => `<p><strong>${p}</strong>: base ${money(partnerBaseTotal(p))}, descontos ${money(sum(allDiscounts().filter((x) => (x.partner || "BASE") === p), "value"))}</p>`).join("");
-  $("baseReport").innerHTML = tableBlock("Bases", ["Sócio","Período","ML","Shopee","Total pagar","Custos variáveis","Líquido após custos"], baseClosingRecords().map((x) => [x.partner, x.period, num(x.ml), num(x.shopee), money(x.totalPay), money(x.variableDiscounts), money(x.netAfterVariable)]));
+  $("partnerReport").innerHTML = RESPONSIBLES.map((p) => `<p><strong>${p}</strong>: base ${money(partnerBaseTotal(p))}, descontos ${money(sum(allDiscounts().filter((x) => (x.partner || "BASE") === p), "value"))}, despesas variáveis ${money(variableExpenseTotal(p))}</p>`).join("");
+  $("baseReport").innerHTML = tableBlock("Bases", ["Sócio","Período","ML","Shopee","Total pagar","Descontos","Custos variáveis","Saldo"], baseClosingRecords().map((x) => [x.partner, x.period, num(x.ml), num(x.shopee), money(x.totalPay), money(x.managerDiscounts), money(x.variableDiscounts), money(x.netAfterVariable)]));
   $("discountReport").innerHTML = `<p>Vales: ${money(sum(discountsByType("Vale"), "value"))}</p><p>Extravios/Ocorrências: ${money(allDiscounts().filter((x) => normalize(x.type).includes("extravio") || normalize(x.type).includes("ocorrencia")).reduce((s, x) => s + x.value, 0))}</p><p>Outros: ${money(allDiscounts().filter((x) => !normalize(x.type).includes("vale") && !normalize(x.type).includes("extravio") && !normalize(x.type).includes("ocorrencia")).reduce((s, x) => s + x.value, 0))}</p>`;
   $("discountReport").innerHTML += `<p>Despesas fixas: ${money(t.fixedExpenses)}</p><p>Despesas variáveis: ${money(t.variableExpenses)}</p><p>Resultado final: ${money(t.finalResult)}</p>`;
   if ($("profitReport")) $("profitReport").innerHTML = `<div class="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>ML entregues</th><th>Shopee entregues</th><th>Valor recebido da base</th><th>Valor pago</th><th>Lucro ML</th><th>Lucro Shopee</th><th>Lucro total</th></tr></thead><tbody>${profitReportRows().map((x) => `<tr><td>${escapeHtml(x.name)}</td><td>${workTypeBadge(x.type)}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${money(x.baseReceived)}</td><td>${money(x.paid)}</td><td>${money(x.profitMl)}</td><td>${money(x.profitShopee)}</td><td>${money(x.profit)}</td></tr>`).join("") || `<tr><td colspan="9" class="empty">Sem registros de lucro.</td></tr>`}</tbody></table></div>`;
@@ -1788,6 +1806,13 @@ function bindEvents() {
     e.preventDefault();
     const id = editingExpenseId || uid("expense");
     const type = $("expenseType").value;
+    if (type === "variavel") {
+      const missing = !$("expenseDate").value || !$("expenseResponsible").value || !$("expenseCategory").value.trim() || !$("expenseDescription").value.trim() || !(parseMoney($("expenseValue").value) > 0) || !$("expenseNote").value.trim() || !$("expenseStatus").value;
+      if (missing) {
+        window.alert("Preencha data, responsavel, categoria, descricao, valor, observacao e status da despesa variavel.");
+        return;
+      }
+    }
     const origin = type === "variavel" ? periodKey($("expenseDate").value, "quinzenal") : { key: "", label: "" };
     const discountOption = $("expenseDiscountPeriod").selectedOptions[0];
     const discountKey = type === "variavel" ? $("expenseDiscountPeriod").value : "";
