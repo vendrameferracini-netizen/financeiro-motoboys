@@ -255,6 +255,20 @@ th { color: var(--muted); background: #fbfcfd; font-size: 12px; text-transform: 
 .supabase-pill.bad { background: #fff1f1; color: var(--bad); }
 .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 36px; }
 .signatures span { border-top: 1px solid var(--ink); padding-top: 8px; text-align: center; }
+.version-stamp {
+  position: fixed;
+  right: 14px;
+  bottom: 10px;
+  z-index: 130;
+  padding: 6px 10px;
+  border: 1px solid #9ccdc4;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .94);
+  color: var(--accent);
+  box-shadow: 0 6px 18px rgba(16, 24, 40, .16);
+  font-size: 12px;
+  font-weight: 900;
+}
 
 @media (max-width: 1100px) {
   body { display: block; grid-template-columns: 1fr; width: 100%; overflow-x: hidden; }
@@ -320,11 +334,17 @@ th { color: var(--muted); background: #fbfcfd; font-size: 12px; text-transform: 
   table { min-width: 680px; }
   .bar-row { grid-template-columns: 1fr; }
   .comparison-grid { grid-template-columns: 1fr; }
+  .version-stamp {
+    left: 12px;
+    right: auto;
+    bottom: 8px;
+    max-width: calc(100vw - 24px);
+  }
 }
 
 @media print {
   body { display: block; background: white; }
-  .sidebar, .topbar, button, form, .filters { display: none !important; }
+  .sidebar, .topbar, button, form, .filters, .version-stamp { display: none !important; }
   .view { display: none; padding: 0; }
   .view.active { display: block; }
   .panel, .card { border-color: #bbb; }
