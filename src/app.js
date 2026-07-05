@@ -729,7 +729,8 @@ function partnerProfileDiscounts(partner) {
   return guilhermeProfileAudit().validRows;
 }
 function variableExpensesByResponsible(responsible) {
-  return allExpenses().filter((x) => x.type === "variavel" && (x.responsible || "BASE") === responsible);
+  const owner = normalizeResponsible(responsible);
+  return allExpenses().filter((x) => x.type === "variavel" && normalizeResponsible(x.responsible) === owner);
 }
 function variableExpenseTotal(responsible) {
   return sum(variableExpensesByResponsible(responsible), "value");
@@ -828,6 +829,14 @@ function periodKey(date, type = "quinzenal") {
   return { key: `${start}|${end}`, label: `${first ? "1ª" : "2ª"} quinzena ${m}/${y}`, start, end };
 }
 
+function normalizeResponsible(value) {
+  const raw = normalize(value).replace(/\./g, "");
+  if (raw === "gm" || raw === "guilherme" || raw === "guilherme m") return "GUILHERME";
+  if (raw === "gil") return "GIL";
+  if (raw === "sales") return "SALES";
+  return "BASE";
+}
+
 function isoDate(y, m, d) {
   return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
@@ -853,14 +862,20 @@ function variableExpensePeriodOptions(date) {
   return uniqueRecords(periods.filter((x) => x.key !== "sem-periodo"), (x) => x.key);
 }
 
+function periodFromKey(key = "", label = "") {
+  const [start = "", end = ""] = String(key || "").split("|");
+  return { key, label: label || String(key || "").replace("|", " a "), start, end };
+}
+
 function enrichExpense(row) {
   const type = row.type || "fixa";
-  if (type !== "variavel") return { ...row, originPeriodKey: "", originPeriodLabel: "", discountPeriodKey: "", discountPeriodLabel: "" };
+  const responsible = normalizeResponsible(row.responsible);
+  if (type !== "variavel") return { ...row, responsible, originPeriodKey: "", originPeriodLabel: "", discountPeriodKey: "", discountPeriodLabel: "", discountPeriodManual: false };
   const origin = periodKey(row.date, "quinzenal");
-  const discount = row.discountPeriodKey
-    ? { key: row.discountPeriodKey, label: row.discountPeriodLabel || row.discountPeriodKey.replace("|", " a ") }
-    : variableExpenseDiscountPeriod(row.date);
-  return { ...row, originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discount.key, discountPeriodLabel: discount.label };
+  const automaticDiscount = variableExpenseDiscountPeriod(row.date);
+  const manualDiscount = row.discountPeriodManual && row.discountPeriodKey ? periodFromKey(row.discountPeriodKey, row.discountPeriodLabel) : null;
+  const discount = manualDiscount || automaticDiscount;
+  return { ...row, responsible, originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discount.key, discountPeriodLabel: discount.label, discountPeriodManual: Boolean(manualDiscount && manualDiscount.key !== automaticDiscount.key) };
 }
 
 function allExpenses() {
@@ -929,7 +944,7 @@ function baseClosingRecords() {
     ensure(responsible, p).managerDiscounts += Number(discount.value || 0);
   });
   allExpenses().filter((x) => x.type === "variavel").forEach((expense) => {
-    const responsible = RESPONSIBLES.includes(expense.responsible) ? expense.responsible : "BASE";
+    const responsible = normalizeResponsible(expense.responsible);
     const origin = expense.originPeriodKey ? { key: expense.originPeriodKey, label: expense.originPeriodLabel || expense.originPeriodKey.replace("|", " a "), start: expense.originPeriodKey.split("|")[0] || "", end: expense.originPeriodKey.split("|")[1] || "" } : null;
     const discount = expense.discountPeriodKey ? { key: expense.discountPeriodKey, label: expense.discountPeriodLabel || expense.discountPeriodKey.replace("|", " a "), start: expense.discountPeriodKey.split("|")[0] || "", end: expense.discountPeriodKey.split("|")[1] || "" } : null;
     if (origin) ensure(responsible, origin).variablePeriodCosts += Number(expense.value || 0);
@@ -1425,6 +1440,7 @@ function renderReports() {
   $("riderReport").innerHTML = allRiders().map((r) => `<p><strong>${escapeHtml(r.name)} ${workTypeBadge(r.collection)}</strong>: ${money(closingRecords().filter((x) => normalize(x.rider) === normalize(r.name)).reduce((s, x) => s + x.net, 0))}</p>`).join("");
   $("partnerReport").innerHTML = RESPONSIBLES.map((p) => `<p><strong>${p}</strong>: base ${money(partnerBaseTotal(p))}, descontos ${money(sum(allDiscounts().filter((x) => (x.partner || "BASE") === p), "value"))}, despesas variáveis ${money(variableExpenseTotal(p))}</p>`).join("");
   $("baseReport").innerHTML = tableBlock("Bases", ["Sócio","Período","ML","Shopee","Total pagar","Descontos","Custos variáveis","Saldo"], baseClosingRecords().map((x) => [x.partner, x.period, num(x.ml), num(x.shopee), money(x.totalPay), money(x.managerDiscounts), money(x.variableDiscounts), money(x.netAfterVariable)]));
+  $("partnerReport").innerHTML += tableBlock("Despesas variaveis por responsavel", ["Data","Responsavel","Categoria","Descricao","Valor","Quinzena desconto","Status"], allExpenses().filter((x) => x.type === "variavel").map((x) => [displayDate(x.date), x.responsible || "BASE", x.category || "", x.description || "", money(x.value), x.discountPeriodLabel || "", x.status || "pendente"]));
   $("discountReport").innerHTML = `<p>Vales: ${money(sum(discountsByType("Vale"), "value"))}</p><p>Extravios/Ocorrências: ${money(allDiscounts().filter((x) => normalize(x.type).includes("extravio") || normalize(x.type).includes("ocorrencia")).reduce((s, x) => s + x.value, 0))}</p><p>Outros: ${money(allDiscounts().filter((x) => !normalize(x.type).includes("vale") && !normalize(x.type).includes("extravio") && !normalize(x.type).includes("ocorrencia")).reduce((s, x) => s + x.value, 0))}</p>`;
   $("discountReport").innerHTML += `<p>Despesas fixas: ${money(t.fixedExpenses)}</p><p>Despesas variáveis: ${money(t.variableExpenses)}</p><p>Resultado final: ${money(t.finalResult)}</p>`;
   if ($("profitReport")) $("profitReport").innerHTML = `<div class="table-wrap"><table><thead><tr><th>Nome</th><th>Tipo</th><th>ML entregues</th><th>Shopee entregues</th><th>Valor recebido da base</th><th>Valor pago</th><th>Lucro ML</th><th>Lucro Shopee</th><th>Lucro total</th></tr></thead><tbody>${profitReportRows().map((x) => `<tr><td>${escapeHtml(x.name)}</td><td>${workTypeBadge(x.type)}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${money(x.baseReceived)}</td><td>${money(x.paid)}</td><td>${money(x.profitMl)}</td><td>${money(x.profitShopee)}</td><td>${money(x.profit)}</td></tr>`).join("") || `<tr><td colspan="9" class="empty">Sem registros de lucro.</td></tr>`}</tbody></table></div>`;
@@ -2059,9 +2075,10 @@ function bindEvents() {
       }
     }
     const origin = type === "variavel" ? periodKey($("expenseDate").value, "quinzenal") : { key: "", label: "" };
+    const automaticDiscount = type === "variavel" ? variableExpenseDiscountPeriod($("expenseDate").value) : { key: "", label: "" };
     const discountOption = $("expenseDiscountPeriod").selectedOptions[0];
-    const discountKey = type === "variavel" ? $("expenseDiscountPeriod").value : "";
-    const row = { id, kind: "despesa", date: $("expenseDate").value, type, category: $("expenseCategory").value.trim(), description: $("expenseDescription").value.trim(), value: parseMoney($("expenseValue").value), responsible: $("expenseResponsible").value, originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discountKey, discountPeriodLabel: type === "variavel" ? (discountOption?.textContent || discountKey.replace("|", " a ")) : "", status: $("expenseStatus").value, note: $("expenseNote").value.trim(), source: "manual" };
+    const discountKey = type === "variavel" ? ($("expenseDiscountPeriod").value || automaticDiscount.key) : "";
+    const row = { id, kind: "despesa", date: $("expenseDate").value, type, category: $("expenseCategory").value.trim(), description: $("expenseDescription").value.trim(), value: parseMoney($("expenseValue").value), responsible: normalizeResponsible($("expenseResponsible").value), originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discountKey, discountPeriodLabel: type === "variavel" ? (discountOption?.textContent || automaticDiscount.label) : "", discountPeriodManual: type === "variavel" && discountKey !== automaticDiscount.key, status: $("expenseStatus").value, note: $("expenseNote").value.trim(), source: "manual" };
     if (!confirmDuplicate(state.expenses, row, editingExpenseId)) return;
     const idx = state.expenses.findIndex((x) => x.id === id);
     if (idx >= 0) state.expenses[idx] = row; else state.expenses.unshift(row);
@@ -2077,8 +2094,9 @@ function bindEvents() {
     const edit = e.target.closest("button[data-edit-expense]");
     const remove = e.target.closest("button[data-remove-expense]");
     if (edit) {
-      const row = state.expenses.find((x) => x.id === edit.dataset.editExpense);
-      if (!row) return;
+      const rawRow = state.expenses.find((x) => x.id === edit.dataset.editExpense);
+      if (!rawRow) return;
+      const row = enrichExpense(rawRow);
       editingExpenseId = row.id;
       $("expenseId").value = row.id;
       $("expenseDate").value = row.date || "";
