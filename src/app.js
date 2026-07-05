@@ -1555,30 +1555,316 @@ function localMigrationScore(source = {}) {
 function safeLocalStateFromText(text) {
   try {
     const parsed = JSON.parse(text || "{}");
-    return normalizeStateData(parsed.state || parsed);
+    const scan = extractLocalStateFromPayload(parsed, "snapshot");
+    return localMigrationScore(scan.state) > 0 ? scan.state : normalizeStateData(parsed.state || parsed);
   } catch {
     return null;
   }
 }
 
-function findBestLocalMigrationSnapshot() {
-  const candidates = [];
-  const addCandidate = (key, value) => {
-    const parsed = safeLocalStateFromText(value);
-    if (!parsed) return;
-    const score = localMigrationScore(parsed);
-    if (score > 0) candidates.push({ key, state: parsed, score });
+function safeJsonParse(text) {
+  try { return { ok: true, value: JSON.parse(text || "null") }; }
+  catch (error) { return { ok: false, value: null, error }; }
+}
+
+function emptyMigrationState() {
+  return normalizeStateData({});
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value.filter(Boolean) : [];
+}
+
+function inferLocalBucket(name = "", sample = {}) {
+  const key = normalize(name).replace(/[^a-z0-9]+/g, "");
+  if (/motoboy|rider|driver|courier|motorista/.test(key)) return "riders";
+  if (/baseentry|packageentry|entrada|pacote|entradaBase|packageentries/.test(key)) return "baseEntries";
+  if (/daily|launch|lancamento|diaria|producao|saida/.test(key)) return "daily";
+  if (/discount|desconto|vale|extravio|ocorrencia|occurrence/.test(key)) return "discounts";
+  if (/expense|despesa|custo/.test(key)) return "expenses";
+  if (/payment|pagamento|pago/.test(key)) return "payments";
+  if (/receipt|recibo/.test(key)) return "receipts";
+  if (/setting|config|configuracao/.test(key)) return "config";
+  const fields = Object.keys(sample || {}).map((x) => normalize(x)).join("|");
+  if (/name|nome/.test(fields) && /rateml|valorml|mlvalue|regions?/.test(fields)) return "riders";
+  if (/totalpackages|totalpacotes|totalpay|entrydate|partner/.test(fields)) return "baseEntries";
+  if (/rider|motoboy|ml|shopee|gross|bruto/.test(fields) && /date|data/.test(fields)) return "daily";
+  if (/discount|desconto|reason|motivo|occurrence|ocorrencia|extravio|vale/.test(fields)) return "discounts";
+  if (/category|categoria|expense|despesa|description|descricao/.test(fields)) return "expenses";
+  if (/receipt|recibo/.test(fields)) return "receipts";
+  if (/payment|pagamento|paid|pago/.test(fields)) return "payments";
+  return "";
+}
+
+function numberFromAny(value) {
+  if (typeof value === "number") return value;
+  return parseMoney(value);
+}
+
+function textFromAny(...values) {
+  const found = values.find((value) => value != null && String(value).trim() !== "");
+  return found == null ? "" : String(found).trim();
+}
+
+function dateFromAny(...values) {
+  const raw = textFromAny(...values);
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+    const [d, m, y] = raw.split("/");
+    return `${y}-${m}-${d}`;
+  }
+  return excelDate(raw) || raw;
+}
+
+function normalizeLocalRow(bucket, row, key, index) {
+  const baseId = textFromAny(row.id, row.supabaseId, `${key}-${bucket}-${index}`);
+  if (bucket === "riders") {
+    const name = textFromAny(row.name, row.nome, row.rider, row.motoboy, row.motoboyName, row.motorista);
+    if (!name) return null;
+    const collection = textFromAny(row.collection, row.workType, row.tipoTrabalho, row.tipo, row.coleta) || "com coleta";
+    return {
+      ...row,
+      id: baseId,
+      name,
+      region: textFromAny(row.region, row.regiao),
+      collection: normalize(collection).includes("freelancer") ? "freelancer" : normalize(collection).includes("sem") ? "sem coleta" : "com coleta",
+      rateMl: numberFromAny(row.rateMl ?? row.valorMl ?? row.mlValue ?? row.valueMl ?? row.mlRate),
+      rateShopee: numberFromAny(row.rateShopee ?? row.valorShopee ?? row.shopeeValue ?? row.valueShopee ?? row.shopeeRate),
+      rateAvulso: numberFromAny(row.rateAvulso ?? row.valorAvulso ?? row.avulsoValue ?? row.valueAvulso ?? row.avulsoRate),
+      note: textFromAny(row.note, row.notes, row.observacao, row.observations),
+      status: textFromAny(row.status) || (row.active === false ? "inativo" : "ativo"),
+      active: row.active !== false && normalize(row.status) !== "inativo",
+      source: row.source || "localStorage"
+    };
+  }
+  if (bucket === "daily") {
+    const ml = Number(row.ml ?? row.mlQty ?? row.quantidadeMl ?? row.mercadoLivre ?? 0);
+    const shopee = Number(row.shopee ?? row.shopeeQty ?? row.quantidadeShopee ?? 0);
+    const avulso = Number(row.avulso ?? row.avulsoQty ?? row.quantidadeAvulso ?? 0);
+    const rateMl = numberFromAny(row.rateMl ?? row.valorMl ?? row.valueMl ?? row.mlRate) || 8;
+    const rateShopee = numberFromAny(row.rateShopee ?? row.valorShopee ?? row.valueShopee ?? row.shopeeRate) || 5;
+    const rateAvulso = numberFromAny(row.rateAvulso ?? row.valorAvulso ?? row.valueAvulso ?? row.avulsoRate) || 8;
+    return {
+      ...row,
+      id: baseId,
+      date: dateFromAny(row.date, row.data, row.launchDate),
+      rider: textFromAny(row.rider, row.motoboy, row.motoboyName, row.motorista),
+      dailyType: textFromAny(row.dailyType, row.launchType, row.tipoLancamento, row.collection) || "com coleta",
+      ml,
+      shopee,
+      avulso,
+      rateMl,
+      rateShopee,
+      rateAvulso,
+      gross: numberFromAny(row.gross ?? row.totalBruto ?? row.total) || ((ml * rateMl) + (shopee * rateShopee) + (avulso * rateAvulso)),
+      responsible: textFromAny(row.responsible, row.responsavel),
+      status: textFromAny(row.status) || "pendente",
+      note: textFromAny(row.note, row.observacao, row.observation),
+      source: row.source || "localStorage"
+    };
+  }
+  if (bucket === "baseEntries") {
+    const ml = Number(row.ml ?? row.mlQty ?? row.quantidadeMl ?? row.mercadoLivre ?? 0);
+    const shopee = Number(row.shopee ?? row.shopeeQty ?? row.quantidadeShopee ?? 0);
+    const rateMl = numberFromAny(row.rateMl ?? row.valorMl ?? row.valueMl) || 8;
+    const rateShopee = numberFromAny(row.rateShopee ?? row.valorShopee ?? row.valueShopee) || 5;
+    return {
+      ...row,
+      id: baseId,
+      date: dateFromAny(row.date, row.data, row.entryDate),
+      partner: normalizeResponsible(textFromAny(row.partner, row.responsible, row.responsavel, row.gestor, row.socio) || "BASE"),
+      ml,
+      shopee,
+      totalPackages: Number(row.totalPackages ?? row.totalPacotes ?? (ml + shopee)),
+      rateMl,
+      rateShopee,
+      valueMl: numberFromAny(row.valueMl ?? row.valorMl) || (ml * rateMl),
+      valueShopee: numberFromAny(row.valueShopee ?? row.valorShopee) || (shopee * rateShopee),
+      totalPay: numberFromAny(row.totalPay ?? row.totalValue ?? row.valorTotal) || ((ml * rateMl) + (shopee * rateShopee)),
+      status: textFromAny(row.status) || "pendente",
+      note: textFromAny(row.note, row.observacao, row.observation),
+      source: row.source || "localStorage"
+    };
+  }
+  if (bucket === "discounts") {
+    const value = numberFromAny(row.value ?? row.valor ?? row.total);
+    if (!value) return null;
+    return {
+      ...row,
+      id: baseId,
+      date: dateFromAny(row.date, row.data, row.discountDate),
+      partner: normalizeResponsible(textFromAny(row.partner, row.responsible, row.responsavel, row.gestor, row.socio) || "BASE"),
+      rider: textFromAny(row.rider, row.motoboy, row.motoboyName, row.motorista, row.closingRider),
+      type: textFromAny(row.type, row.tipo, row.kind) || "OUTROS",
+      value,
+      reason: textFromAny(row.reason, row.motivo),
+      occurrence: textFromAny(row.occurrence, row.ocorrencia),
+      observation: textFromAny(row.observation, row.observacao, row.note),
+      code: textFromAny(row.code, row.codigo, row.packageCode),
+      status: textFromAny(row.status) || "pendente",
+      source: row.source || "localStorage"
+    };
+  }
+  if (bucket === "expenses") {
+    const value = numberFromAny(row.value ?? row.valor ?? row.total);
+    if (!value) return null;
+    const type = normalize(textFromAny(row.type, row.tipo, row.expenseType)).includes("fix") ? "fixa" : "variavel";
+    return {
+      ...row,
+      id: baseId,
+      date: dateFromAny(row.date, row.data, row.expenseDate),
+      type,
+      responsible: normalizeResponsible(textFromAny(row.responsible, row.responsavel, row.partner, row.gestor) || "BASE"),
+      category: textFromAny(row.category, row.categoria) || "Sem categoria",
+      description: textFromAny(row.description, row.descricao),
+      value,
+      note: textFromAny(row.note, row.observacao, row.observation),
+      status: textFromAny(row.status) || "pendente",
+      source: row.source || "localStorage"
+    };
+  }
+  if (bucket === "payments" || bucket === "receipts") {
+    return { ...row, id: baseId, source: row.source || "localStorage" };
+  }
+  return null;
+}
+
+function mergeMigrationBucket(target, bucket, rows, key) {
+  if (!Array.isArray(rows)) return 0;
+  let added = 0;
+  rows.forEach((row, index) => {
+    const normalized = normalizeLocalRow(bucket, row, key, index);
+    if (!normalized) return;
+    target[bucket].push(normalized);
+    added += 1;
+  });
+  return added;
+}
+
+function extractLocalStateFromPayload(payload, key = "") {
+  const stateFound = emptyMigrationState();
+  const detected = {};
+  const visit = (node, label, depth = 0) => {
+    if (!node || depth > 3) return;
+    if (Array.isArray(node)) {
+      const bucket = inferLocalBucket(label, node[0] || {});
+      if (bucket && bucket !== "config") {
+        const count = mergeMigrationBucket(stateFound, bucket, node, key || label);
+        if (count) detected[bucket] = (detected[bucket] || 0) + count;
+      }
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (node.state) visit(node.state, `${label}.state`, depth + 1);
+    if (node.data) visit(node.data, `${label}.data`, depth + 1);
+    if (node.payload) visit(node.payload, `${label}.payload`, depth + 1);
+    if (node.backup) visit(node.backup, `${label}.backup`, depth + 1);
+    ["riders", "motoboys", "drivers", "couriers"].forEach((prop) => mergeMigrationBucket(stateFound, "riders", asArray(node[prop]), key || prop));
+    ["daily", "dailyLaunches", "launches", "lancamentos", "lancamentosDiarios", "daily_launches"].forEach((prop) => mergeMigrationBucket(stateFound, "daily", asArray(node[prop]), key || prop));
+    ["baseEntries", "packageEntries", "entradas", "entradasBase", "package_entries"].forEach((prop) => mergeMigrationBucket(stateFound, "baseEntries", asArray(node[prop]), key || prop));
+    ["discounts", "descontos", "vales", "extravios", "occurrences", "ocorrencias"].forEach((prop) => mergeMigrationBucket(stateFound, "discounts", asArray(node[prop]), key || prop));
+    ["expenses", "despesas"].forEach((prop) => mergeMigrationBucket(stateFound, "expenses", asArray(node[prop]), key || prop));
+    ["payments", "pagamentos"].forEach((prop) => mergeMigrationBucket(stateFound, "payments", asArray(node[prop]), key || prop));
+    ["receipts", "recibos"].forEach((prop) => mergeMigrationBucket(stateFound, "receipts", asArray(node[prop]), key || prop));
+    if (node.config || node.settings || node.configuracoes) stateFound.config = { ...stateFound.config, ...(node.config || node.settings || node.configuracoes || {}) };
+    Object.entries(node).forEach(([prop, value]) => {
+      if (!Array.isArray(value)) return;
+      const bucket = inferLocalBucket(prop, value[0] || {});
+      if (bucket && bucket !== "config") {
+        const count = mergeMigrationBucket(stateFound, bucket, value, key || prop);
+        if (count) detected[bucket] = (detected[bucket] || 0) + count;
+      }
+    });
   };
-  addCandidate(STORE_KEY, localStorage.getItem(STORE_KEY));
-  addCandidate(MIGRATION_SNAPSHOT_KEY, localStorage.getItem(MIGRATION_SNAPSHOT_KEY));
+  visit(payload, key || "localStorage", 0);
+  const normalized = dedupeMigrationState(stateFound);
+  return { state: normalized, detected };
+}
+
+function dedupeMigrationState(source) {
+  const by = (rows, keyFn) => uniqueRecords(rows || [], keyFn);
+  return {
+    ...source,
+    riders: by(source.riders, (x) => uniqueKey([x.id, x.name])),
+    daily: by(source.daily, (x) => uniqueKey([x.id, x.date, x.rider, x.ml, x.shopee, x.avulso, x.gross])),
+    baseEntries: by(source.baseEntries, (x) => uniqueKey([x.id, x.date, x.partner, x.ml, x.shopee, x.totalPay])),
+    discounts: by(source.discounts, (x) => uniqueKey([x.id, x.date, x.partner, x.rider, x.type, moneyKey(x.value), x.observation || x.reason])),
+    expenses: by(source.expenses, (x) => uniqueKey([x.id, x.date, x.responsible, x.type, x.category, moneyKey(x.value)])),
+    payments: by(source.payments, (x) => uniqueKey([x.id, x.date, x.rider, moneyKey(x.value || x.net)])),
+    receipts: by(source.receipts, (x) => uniqueKey([x.id, x.receiptNumber, x.rider, x.periodKey]))
+  };
+}
+
+function localStoragePreview(value) {
+  const text = String(value || "");
+  return text.length > 220 ? `${text.slice(0, 220)}...` : text;
+}
+
+function localStorageDiagnostics() {
+  const rows = [];
+  const combined = emptyMigrationState();
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
-    if (!key || key === STORE_KEY || key === MIGRATION_SNAPSHOT_KEY) continue;
-    if (!/motoboy|financeiro|backup|baseSocios/i.test(key)) continue;
-    addCandidate(key, localStorage.getItem(key));
+    const value = localStorage.getItem(key);
+    const parsed = safeJsonParse(value);
+    const extracted = parsed.ok ? extractLocalStateFromPayload(parsed.value, key) : { state: emptyMigrationState(), detected: {} };
+    const counts = localMigrationCounts(extracted.state);
+    Object.keys(combined).forEach((bucket) => {
+      if (Array.isArray(combined[bucket])) combined[bucket].push(...(extracted.state[bucket] || []));
+    });
+    combined.config = { ...combined.config, ...(extracted.state.config || {}) };
+    rows.push({
+      key,
+      size: String(value || "").length,
+      json: parsed.ok ? "JSON" : "texto",
+      recordCount: Object.values(counts).reduce((total, count) => total + Number(count || 0), 0),
+      detectedType: Object.entries(counts).filter(([, count]) => count > 0).map(([name, count]) => `${name}: ${count}`).join(", ") || "sem dados migraveis",
+      counts,
+      preview: localStoragePreview(value)
+    });
   }
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0] || { key: "", state: normalizeStateData({}), score: 0 };
+  const stateFound = dedupeMigrationState(combined);
+  console.group("Diagnostico localStorage - Financeiro Motoboys");
+  console.table(rows.map((row) => ({ chave: row.key, tamanho: row.size, registros: row.recordCount, tipo: row.json, detectado: row.detectedType })));
+  console.log("Contagens migraveis", localMigrationCounts(stateFound));
+  console.groupEnd();
+  return { rows, state: stateFound, score: localMigrationScore(stateFound) };
+}
+
+function renderLocalStorageDiagnostics(targetId = "backupLocalStorageDiagnostics") {
+  const target = $(targetId);
+  const diagnostics = localStorageDiagnostics();
+  if (!target) return diagnostics;
+  if (!diagnostics.rows.length) {
+    target.innerHTML = `<div class="empty">Nenhuma chave encontrada no localStorage deste navegador.</div>`;
+    return diagnostics;
+  }
+  const rows = diagnostics.rows.map((row) => [
+    row.key,
+    `${num(row.size)} caracteres`,
+    num(row.recordCount),
+    row.json,
+    row.detectedType,
+    row.preview
+  ]);
+  const counts = localMigrationCounts(diagnostics.state);
+  target.innerHTML = `<div class="cards">${[
+    card("Motoboys locais", num(counts.motoboys)),
+    card("Entradas locais", num(counts.entradas)),
+    card("Lancamentos locais", num(counts.lancamentos)),
+    card("Descontos locais", num(counts.descontos))
+  ].join("")}</div>${tableBlock("Chaves encontradas no localStorage", ["Chave", "Tamanho", "Registros", "Tipo", "Dados detectados", "Previa"], rows)}`;
+  return diagnostics;
+}
+
+function findBestLocalMigrationSnapshot() {
+  const diagnostics = localStorageDiagnostics();
+  return {
+    key: diagnostics.rows.map((row) => row.key).join(", "),
+    state: diagnostics.state,
+    score: diagnostics.score,
+    rows: diagnostics.rows
+  };
 }
 
 function captureLocalMigrationSnapshot() {
@@ -1699,6 +1985,7 @@ function renderBackup() {
   ].join("");
   const history = (state.audit || []).slice(0, 12).map((x) => [displayDate(String(x.at || "").slice(0, 10)), x.action || "", x.detail || ""]);
   $("backupHistory").innerHTML = tableBlock("Alteracoes recentes", ["Data","Acao","Detalhe"], history);
+  renderLocalStorageDiagnostics("backupLocalStorageDiagnostics");
 }
 
 function isLikelyDuplicate(list, row, ignoreId = "") {
@@ -2036,40 +2323,64 @@ async function migrateLocalToSupabase() {
     showBackupFeedback(message, "error");
     return;
   }
-  const snapshot = localStateForMigration && localMigrationScore(localStateForMigration) > 0
-    ? { key: "snapshot capturado antes do Supabase", state: localStateForMigration, score: localMigrationScore(localStateForMigration) }
-    : findBestLocalMigrationSnapshot();
+  const reportTarget = $("backupMigrationReport");
+  const setMigrationReport = (message, counts = null, type = "ok") => {
+    if (reportTarget) {
+      const countRows = counts ? Object.entries(counts).map(([name, value]) => [name, num(value)]) : [];
+      reportTarget.innerHTML = `<div class="feedback ${type}">${escapeHtml(message)}</div>${countRows.length ? tableBlock("Progresso da migracao", ["Tipo", "Quantidade"], countRows) : ""}`;
+    }
+    showBackupFeedback(message, type);
+  };
+  const snapshot = findBestLocalMigrationSnapshot();
   const source = snapshot.state;
   if (!source || localMigrationScore(source) === 0) {
-    const message = "Nenhum dado antigo foi encontrado no localStorage para migrar.";
-    showSupabaseError(new Error(message));
+    const message = "Nenhum dado local antigo encontrado neste navegador.";
     showBackupFeedback(message, "error");
+    renderLocalStorageDiagnostics("backupLocalStorageDiagnostics");
+    renderLocalStorageDiagnostics("dashboardLocalStorageReport");
     return;
   }
   if (!window.confirm(`${localMigrationSummaryText(source, snapshot.key)}\n\nMigrar estes dados locais para o Supabase agora?\n\nOs registros com o mesmo ID serao atualizados, sem duplicar. O localStorage nao sera apagado.`)) return;
   try {
+    setMigrationReport("Migracao iniciada. Lendo Supabase e preparando registros locais...", localMigrationCounts(source), "ok");
     const cloudBefore = await loadCloudState(defaultState());
     const merged = mergeUniqueCloudState(source, cloudBefore);
-    const buckets = [["riders", merged.riders], ["daily", merged.daily], ["baseEntries", merged.baseEntries], ["discounts", merged.discounts], ["expenses", merged.expenses], ["payments", merged.payments], ["receipts", merged.receipts]];
+    const migratedCounts = { motoboys: 0, entradas: 0, lancamentos: 0, descontos: 0, despesas: 0, pagamentos: 0, recibos: 0 };
+    const buckets = [
+      ["riders", source.riders, "motoboys"],
+      ["baseEntries", source.baseEntries, "entradas"],
+      ["daily", source.daily, "lancamentos"],
+      ["discounts", source.discounts, "descontos"],
+      ["expenses", source.expenses, "despesas"],
+      ["payments", source.payments, "pagamentos"],
+      ["receipts", source.receipts, "recibos"]
+    ];
     for (const [bucket, records] of buckets) {
-      for (const record of records || []) await persistRecord(bucket, record);
+      const countKey = buckets.find((item) => item[0] === bucket)?.[2];
+      setMigrationReport(`Migrando ${countKey}...`, migratedCounts, "ok");
+      for (const record of records || []) {
+        await persistRecord(bucket, record);
+        migratedCounts[countKey] += 1;
+      }
     }
+    setMigrationReport("Salvando configuracoes e recarregando dados do Supabase...", migratedCounts, "ok");
     await saveCloudSettings(merged);
     state = await loadCloudState(defaultState());
     lastSupabaseSync = new Date().toISOString();
-    const status = { migratedAt: new Date().toISOString(), sourceKey: snapshot.key, counts: localMigrationCounts(source) };
+    const status = { migratedAt: new Date().toISOString(), sourceKey: snapshot.key, counts: migratedCounts };
     localStorage.setItem(MIGRATION_MARK_KEY, JSON.stringify(status));
     localStateForMigration = source;
     if ($("supabaseFeedback")) {
       $("supabaseFeedback").textContent = "Dados locais migrados para Supabase.";
       $("supabaseFeedback").className = "feedback ok";
     }
-    showBackupFeedback("Dados locais migrados para Supabase. O localStorage foi mantido e marcado como migrado.", "ok");
+    setMigrationReport("Dados locais migrados para Supabase. Dashboard atualizado com os dados recarregados.", migratedCounts, "ok");
     renderSupabaseStatus();
     renderAll();
+    renderLocalStorageDiagnostics("dashboardLocalStorageReport");
   } catch (error) {
     showSupabaseError(error);
-    showBackupFeedback(`Erro ao migrar para Supabase: ${error.message}`, "error");
+    setMigrationReport(`Erro ao migrar para Supabase: ${error.message}`, null, "error");
   }
 }
 async function initSupabaseApp() {
@@ -2266,6 +2577,7 @@ function bindEvents() {
   $("saveConfig").addEventListener("click", () => { state.config = { ml: parseMoney($("configMl").value), shopee: parseMoney($("configShopee").value), avulso: parseMoney($("configAvulso").value) }; saveState("Configuração", "Valores padrão"); renderAll(); });
   $("syncSupabase")?.addEventListener("click", async () => { await syncFromSupabase(); renderAll(); });
   $("migrateLocalToSupabase")?.addEventListener("click", migrateLocalToSupabase);
+  $("dashboardLocalStorageDiagnostic")?.addEventListener("click", () => renderLocalStorageDiagnostics("dashboardLocalStorageReport"));
   $("logoutSupabase")?.addEventListener("click", async () => { await signOutSupabase(); supabaseOnline = false; supabaseSession = null; supabaseProfile = null; showAuthGate(isSupabaseConfigured, "Sessao encerrada."); renderSupabaseStatus(); });
   $("clearOperational")?.addEventListener("click", () => {
     if (!window.confirm("Limpar lançamentos operacionais? Cadastros de motoboys, valores e regras serão preservados.")) return;

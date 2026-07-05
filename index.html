@@ -66,6 +66,13 @@
 
     <section id="dashboard" class="view active">
       <div id="dashboardCards" class="cards"></div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Diagnostico localStorage</h2>
+          <button id="dashboardLocalStorageDiagnostic" type="button">Diagnostico localStorage</button>
+        </div>
+        <div id="dashboardLocalStorageReport"></div>
+      </section>
       <div class="grid two">
         <section class="panel"><div class="panel-head"><h2>Resumo Operacional</h2></div><div id="operationalSummary"></div></section>
         <section class="panel"><div class="panel-head"><h2>Resumo de Caixa</h2></div><div id="cashSummary"></div></section>
@@ -218,17 +225,22 @@
           <div class="actions">
             <button id="exportBackup" class="primary" type="button">Exportar backup</button>
             <button id="importBackup" type="button">Importar backup</button>
-            <button id="backupMigrateLocal" type="button">Migrar dados locais para Supabase</button>
+            <button id="backupMigrateLocal" class="primary" type="button">Migrar dados locais para Supabase</button>
             <button id="clearOperationalBackup" type="button">Limpar dados operacionais</button>
             <input id="backupFile" type="file" accept="application/json,.json" hidden>
           </div>
           <div id="backupFeedback" class="feedback" role="status"></div>
+          <div id="backupMigrationReport"></div>
         </section>
         <section class="panel">
           <div class="panel-head"><h2>Informacoes do backup</h2></div>
           <div id="backupInfo" class="cards"></div>
         </section>
       </div>
+      <section class="panel">
+        <div class="panel-head"><h2>Diagnostico localStorage</h2></div>
+        <div id="backupLocalStorageDiagnostics"></div>
+      </section>
       <section class="panel">
         <div class="panel-head"><h2>Historico recente</h2></div>
         <div id="backupHistory"></div>
