@@ -30,13 +30,11 @@ const DEFAULT_NO_COLLECTION_ML = 6;
 const DEFAULT_NO_COLLECTION_SHOPEE = 4;
 
 let state = loadState();
-prepareCleanOperationalState();
-let imported = applyCleanOperationalMode(buildImportedModelV2());
-seedRidersFromWorkbook();
+let imported = { riders: [], daily: [], baseEntries: [], discounts: [], payments: [], ignored: [], auditBlocks: [], discountOrigins: [], duplicateCount: 0, guilhermeAuditRows: [] };
 let editingRiderId = "";
 let editingDiscountId = "";
 let editingExpenseId = "";
-let selectedRider = allRiders()[0]?.name || "";
+let selectedRider = "";
 let selectedPartner = "GIL";
 let supabaseSession = null;
 let supabaseProfile = null;
@@ -198,6 +196,13 @@ function seedRidersFromWorkbook() {
   });
   state.riders = [...existing.values()].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   saveState();
+}
+
+function initializeWorkbookData() {
+  prepareCleanOperationalState();
+  imported = applyCleanOperationalMode(buildImportedModelV2());
+  seedRidersFromWorkbook();
+  selectedRider = allRiders()[0]?.name || "";
 }
 
 function uid(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
@@ -2172,6 +2177,7 @@ function bindEvents() {
 
 function exportExcel() { const blob = new Blob([`<!doctype html><html><meta charset="utf-8"><body>${document.querySelector(".view.active").innerHTML}</body></html>`], { type: "application/vnd.ms-excel;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "financeiro-motoboys.xls"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
 
+initializeWorkbookData();
 ensureSupabasePanel();
 bindEvents();
 await initSupabaseApp();

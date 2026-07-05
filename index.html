@@ -242,6 +242,40 @@
 
   <script src="/workbook-data.js"></script>
   <script src="/sync-report.js"></script>
+  <script>
+    (() => {
+      const toggle = document.getElementById("mobileMenuToggle");
+      const sidebar = document.getElementById("sidebar");
+      const backdrop = document.getElementById("mobileMenuBackdrop");
+      const title = document.getElementById("viewTitle");
+      const setMenu = (open) => {
+        document.body.classList.toggle("mobile-menu-open", Boolean(open));
+        sidebar?.classList.toggle("is-open", Boolean(open));
+        toggle?.setAttribute("aria-expanded", open ? "true" : "false");
+        toggle?.setAttribute("aria-label", open ? "Fechar menu" : "Abrir menu");
+        if (backdrop) backdrop.hidden = !open;
+      };
+      const showView = (id) => {
+        document.querySelectorAll(".nav-item, .view").forEach((item) => item.classList.remove("active"));
+        const nav = document.querySelector(`.nav-item[data-view="${id}"]`);
+        document.getElementById(id)?.classList.add("active");
+        nav?.classList.add("active");
+        if (title) title.textContent = nav?.textContent || "Dashboard";
+        setMenu(false);
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      };
+      toggle?.addEventListener("click", () => setMenu(!sidebar?.classList.contains("is-open")));
+      backdrop?.addEventListener("click", () => setMenu(false));
+      document.querySelectorAll(".nav-item").forEach((button) => {
+        button.addEventListener("pointerup", (event) => {
+          event.preventDefault();
+          showView(button.dataset.view);
+        });
+        button.addEventListener("click", () => showView(button.dataset.view));
+      });
+      window.financeiroMobileNavReady = true;
+    })();
+  </script>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
