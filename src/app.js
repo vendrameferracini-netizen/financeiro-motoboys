@@ -19,6 +19,8 @@ const sheets = workbook.sheets || [];
 const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const NUM = new Intl.NumberFormat("pt-BR");
 const STORE_KEY = "motoboyFinanceiro.baseSocios.v1";
+const MIGRATION_SNAPSHOT_KEY = `${STORE_KEY}.preSupabaseMigration`;
+const MIGRATION_MARK_KEY = `${STORE_KEY}.migrationStatus`;
 const PARTNERS = ["GIL", "SALES", "GUILHERME"];
 const RESPONSIBLES = [...PARTNERS, "BASE"];
 const PARTNER_SHEETS = { GIL: "GIL", SALES: "SALES", GUILHERME: "GUILHERME M" };
@@ -1533,6 +1535,102 @@ function showBackupFeedback(message, type = "ok") {
   el.className = `feedback ${type}`;
 }
 
+function localMigrationCounts(source = {}) {
+  return {
+    motoboys: (source.riders || []).length,
+    entradas: (source.baseEntries || []).length,
+    lancamentos: (source.daily || []).length,
+    descontos: (source.discounts || []).length,
+    despesas: (source.expenses || []).length,
+    pagamentos: (source.payments || []).length,
+    recibos: (source.receipts || []).length
+  };
+}
+
+function localMigrationScore(source = {}) {
+  const counts = localMigrationCounts(source);
+  return Object.values(counts).reduce((total, value) => total + Number(value || 0), 0);
+}
+
+function safeLocalStateFromText(text) {
+  try {
+    const parsed = JSON.parse(text || "{}");
+    return normalizeStateData(parsed.state || parsed);
+  } catch {
+    return null;
+  }
+}
+
+function findBestLocalMigrationSnapshot() {
+  const candidates = [];
+  const addCandidate = (key, value) => {
+    const parsed = safeLocalStateFromText(value);
+    if (!parsed) return;
+    const score = localMigrationScore(parsed);
+    if (score > 0) candidates.push({ key, state: parsed, score });
+  };
+  addCandidate(STORE_KEY, localStorage.getItem(STORE_KEY));
+  addCandidate(MIGRATION_SNAPSHOT_KEY, localStorage.getItem(MIGRATION_SNAPSHOT_KEY));
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key || key === STORE_KEY || key === MIGRATION_SNAPSHOT_KEY) continue;
+    if (!/motoboy|financeiro|backup|baseSocios/i.test(key)) continue;
+    addCandidate(key, localStorage.getItem(key));
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0] || { key: "", state: normalizeStateData({}), score: 0 };
+}
+
+function captureLocalMigrationSnapshot() {
+  const current = safeLocalStateFromText(localStorage.getItem(STORE_KEY));
+  if (!current || localMigrationScore(current) === 0) return;
+  const saved = safeLocalStateFromText(localStorage.getItem(MIGRATION_SNAPSHOT_KEY));
+  if (saved && localMigrationScore(saved) > 0) return;
+  localStorage.setItem(MIGRATION_SNAPSHOT_KEY, JSON.stringify({ capturedAt: new Date().toISOString(), state: current }));
+  localStateForMigration = current;
+}
+
+function localMigrationSummaryText(source, originKey = "") {
+  const counts = localMigrationCounts(source);
+  return [
+    `Origem localStorage: ${originKey || "snapshot atual"}`,
+    `Motoboys encontrados: ${num(counts.motoboys)}`,
+    `Entradas encontradas: ${num(counts.entradas)}`,
+    `Lançamentos encontrados: ${num(counts.lancamentos)}`,
+    `Descontos encontrados: ${num(counts.descontos)}`,
+    `Despesas encontradas: ${num(counts.despesas)}`,
+    `Pagamentos encontrados: ${num(counts.pagamentos)}`,
+    `Recibos encontrados: ${num(counts.recibos)}`
+  ].join("\n");
+}
+
+function mergeUniqueCloudState(localSource, cloudSource) {
+  const mergeById = (cloudRows = [], localRows = []) => {
+    const map = new Map();
+    [...cloudRows, ...localRows].forEach((row) => {
+      if (!row) return;
+      const id = row.supabaseId || row.id || uniqueKey([row.source || "local", row.date || row.name || "", row.rider || row.partner || row.responsible || "", row.category || "", row.value || row.gross || row.totalPay || ""]);
+      map.set(id, { ...map.get(id), ...row, id });
+    });
+    return [...map.values()];
+  };
+  return {
+    ...cloudSource,
+    riders: mergeById(cloudSource.riders, localSource.riders),
+    daily: mergeById(cloudSource.daily, localSource.daily),
+    baseEntries: mergeById(cloudSource.baseEntries, localSource.baseEntries),
+    discounts: mergeById(cloudSource.discounts, localSource.discounts),
+    expenses: mergeById(cloudSource.expenses, localSource.expenses),
+    payments: mergeById(cloudSource.payments, localSource.payments),
+    receipts: mergeById(cloudSource.receipts, localSource.receipts),
+    paid: { ...(cloudSource.paid || {}), ...(localSource.paid || {}) },
+    basePaid: { ...(cloudSource.basePaid || {}), ...(localSource.basePaid || {}) },
+    config: { ...(cloudSource.config || {}), ...(localSource.config || {}) },
+    audit: uniqueRecords([...(cloudSource.audit || []), ...(localSource.audit || [])], (x) => uniqueKey([x.at, x.action, x.detail])),
+    lastBackupAt: cloudSource.lastBackupAt || localSource.lastBackupAt || ""
+  };
+}
+
 function downloadJson(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -1583,12 +1681,21 @@ function clearOperationalData(origin = "Backup") {
 function renderBackup() {
   if (!$("backupInfo")) return;
   const lastBackup = state.lastBackupAt ? displayDate(state.lastBackupAt.slice(0, 10)) : "Nenhum backup exportado";
+  const snapshot = findBestLocalMigrationSnapshot();
+  const localCounts = localMigrationCounts(snapshot.state);
+  let migratedAt = "";
+  try { migratedAt = JSON.parse(localStorage.getItem(MIGRATION_MARK_KEY) || "{}").migratedAt || ""; } catch {}
   $("backupInfo").innerHTML = [
     card("Ultimo backup", lastBackup),
     card("Motoboys", num((state.riders || []).length)),
     card("Lancamentos", num((state.daily || []).length + (state.baseEntries || []).length)),
     card("Descontos", num((state.discounts || []).length)),
-    card("Despesas", num((state.expenses || []).length))
+    card("Despesas", num((state.expenses || []).length)),
+    card("Local: motoboys", num(localCounts.motoboys)),
+    card("Local: entradas", num(localCounts.entradas)),
+    card("Local: lancamentos", num(localCounts.lancamentos)),
+    card("Local: descontos", num(localCounts.descontos)),
+    card("Migracao Supabase", migratedAt ? displayDate(migratedAt.slice(0, 10)) : "Nao migrado")
   ].join("");
   const history = (state.audit || []).slice(0, 12).map((x) => [displayDate(String(x.at || "").slice(0, 10)), x.action || "", x.detail || ""]);
   $("backupHistory").innerHTML = tableBlock("Alteracoes recentes", ["Data","Acao","Detalhe"], history);
@@ -1889,6 +1996,7 @@ function showAuthGate(show, message = "") {
 }
 
 async function syncFromSupabase() {
+  captureLocalMigrationSnapshot();
   if (!isSupabaseConfigured) {
     supabaseOnline = false;
     showSupabaseError(new Error("VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY nao configuradas."));
@@ -1905,9 +2013,6 @@ async function syncFromSupabase() {
     return false;
   }
   try {
-    if (!localStateForMigration) {
-      try { localStateForMigration = normalizeStateData(JSON.parse(localStorage.getItem(STORE_KEY) || "{}")); } catch { localStateForMigration = normalizeStateData(state); }
-    }
     const defaults = defaultState();
     state = await loadCloudState(defaults);
     supabaseOnline = true;
@@ -1926,27 +2031,47 @@ async function syncFromSupabase() {
 
 async function migrateLocalToSupabase() {
   if (!supabaseOnline) {
-    showSupabaseError(new Error("Sem conexão com Supabase. Não foi possível salvar."));
+    const message = "Sem conexao com Supabase. Nao foi possivel salvar.";
+    showSupabaseError(new Error(message));
+    showBackupFeedback(message, "error");
     return;
   }
-  if (!window.confirm("Migrar os dados locais atuais para o Supabase? Registros com o mesmo ID serão atualizados.")) return;
-  const source = localStateForMigration || state;
-  const buckets = [["riders", source.riders], ["daily", source.daily], ["baseEntries", source.baseEntries], ["discounts", source.discounts], ["expenses", source.expenses], ["payments", source.payments], ["receipts", source.receipts]];
+  const snapshot = localStateForMigration && localMigrationScore(localStateForMigration) > 0
+    ? { key: "snapshot capturado antes do Supabase", state: localStateForMigration, score: localMigrationScore(localStateForMigration) }
+    : findBestLocalMigrationSnapshot();
+  const source = snapshot.state;
+  if (!source || localMigrationScore(source) === 0) {
+    const message = "Nenhum dado antigo foi encontrado no localStorage para migrar.";
+    showSupabaseError(new Error(message));
+    showBackupFeedback(message, "error");
+    return;
+  }
+  if (!window.confirm(`${localMigrationSummaryText(source, snapshot.key)}\n\nMigrar estes dados locais para o Supabase agora?\n\nOs registros com o mesmo ID serao atualizados, sem duplicar. O localStorage nao sera apagado.`)) return;
   try {
+    const cloudBefore = await loadCloudState(defaultState());
+    const merged = mergeUniqueCloudState(source, cloudBefore);
+    const buckets = [["riders", merged.riders], ["daily", merged.daily], ["baseEntries", merged.baseEntries], ["discounts", merged.discounts], ["expenses", merged.expenses], ["payments", merged.payments], ["receipts", merged.receipts]];
     for (const [bucket, records] of buckets) {
       for (const record of records || []) await persistRecord(bucket, record);
     }
-    await saveCloudSettings(source);
+    await saveCloudSettings(merged);
     state = await loadCloudState(defaultState());
     lastSupabaseSync = new Date().toISOString();
-    $("supabaseFeedback").textContent = "Dados locais migrados para Supabase.";
-    $("supabaseFeedback").className = "feedback ok";
+    const status = { migratedAt: new Date().toISOString(), sourceKey: snapshot.key, counts: localMigrationCounts(source) };
+    localStorage.setItem(MIGRATION_MARK_KEY, JSON.stringify(status));
+    localStateForMigration = source;
+    if ($("supabaseFeedback")) {
+      $("supabaseFeedback").textContent = "Dados locais migrados para Supabase.";
+      $("supabaseFeedback").className = "feedback ok";
+    }
+    showBackupFeedback("Dados locais migrados para Supabase. O localStorage foi mantido e marcado como migrado.", "ok");
     renderSupabaseStatus();
+    renderAll();
   } catch (error) {
     showSupabaseError(error);
+    showBackupFeedback(`Erro ao migrar para Supabase: ${error.message}`, "error");
   }
 }
-
 async function initSupabaseApp() {
   ensureSupabasePanel();
   if (!isSupabaseConfigured) {
@@ -2153,6 +2278,7 @@ function bindEvents() {
   $("clearOperationalBackup")?.addEventListener("click", () => clearOperationalData("Backup"));
   $("exportBackup")?.addEventListener("click", exportBackupData);
   $("importBackup")?.addEventListener("click", () => $("backupFile")?.click());
+  $("backupMigrateLocal")?.addEventListener("click", migrateLocalToSupabase);
   $("backupFile")?.addEventListener("change", (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
