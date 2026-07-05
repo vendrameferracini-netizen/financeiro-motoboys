@@ -2189,9 +2189,17 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js", { scope: "/" })
       .then((registration) => {
         console.info("Service worker ativo:", registration.scope);
+        registration.update();
+        if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
       })
       .catch((error) => {
         console.error("Falha ao registrar service worker:", error);
       });
+  });
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!window.__financeiroReloadedForSw) {
+      window.__financeiroReloadedForSw = true;
+      window.location.reload();
+    }
   });
 }

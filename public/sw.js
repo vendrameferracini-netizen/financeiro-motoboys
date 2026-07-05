@@ -1,8 +1,6 @@
-const CACHE_NAME = "financeiro-motoboys-v3";
+const CACHE_NAME = "financeiro-motoboys-v5-mobile-20260705";
 const appUrl = (path) => new URL(path, self.location.origin).toString();
 const APP_SHELL = [
-  "/",
-  "/index.html",
   "/workbook-data.js",
   "/sync-report.js",
   "/manifest.json",
@@ -27,10 +25,29 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
   if (requestUrl.origin !== self.location.origin) return;
+  const acceptsHtml = event.request.mode === "navigate" || event.request.headers.get("accept")?.includes("text/html");
+  if (acceptsHtml) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(appUrl("/index.html"), clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(appUrl("/index.html")))
+    );
+    return;
+  }
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
