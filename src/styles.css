@@ -299,6 +299,7 @@ th { color: var(--muted); background: #fbfcfd; font-size: 12px; text-transform: 
     height: 2px;
     border-radius: 999px;
     background: currentColor;
+    pointer-events: none;
   }
   .mobile-menu-backdrop {
     position: fixed;

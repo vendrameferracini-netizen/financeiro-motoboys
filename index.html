@@ -264,7 +264,19 @@
         setMenu(false);
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       };
-      toggle?.addEventListener("click", () => setMenu(!sidebar?.classList.contains("is-open")));
+      let menuPointerHandled = false;
+      const toggleFromEvent = (event) => {
+        if (!event.target?.closest?.("#mobileMenuToggle")) return;
+        event.preventDefault();
+        if (event.type === "click" && menuPointerHandled) return;
+        if (event.type === "pointerup") {
+          menuPointerHandled = true;
+          window.setTimeout(() => { menuPointerHandled = false; }, 350);
+        }
+        setMenu(!sidebar?.classList.contains("is-open"));
+      };
+      document.addEventListener("pointerup", toggleFromEvent, true);
+      document.addEventListener("click", toggleFromEvent, true);
       backdrop?.addEventListener("click", () => setMenu(false));
       document.querySelectorAll(".nav-item").forEach((button) => {
         button.addEventListener("pointerup", (event) => {
