@@ -43,7 +43,6 @@ let supabaseProfile = null;
 let supabaseOnline = false;
 let lastSupabaseSync = "";
 let localStateForMigration = null;
-let lastMobileNavTouchAt = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -1858,6 +1857,7 @@ function setMobileMenu(open) {
   document.body.classList.toggle("mobile-menu-open", Boolean(open));
   sidebar?.classList.toggle("is-open", Boolean(open));
   if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  if (toggle) toggle.setAttribute("aria-label", open ? "Fechar menu" : "Abrir menu");
   if (backdrop) backdrop.hidden = !open;
 }
 
@@ -1975,15 +1975,17 @@ function bindEvents() {
     switchView(btn.dataset.view);
   };
   document.querySelectorAll(".nav-item").forEach((btn) => {
+    let pointerHandled = false;
+    btn.addEventListener("pointerup", (event) => {
+      event.preventDefault();
+      pointerHandled = true;
+      activateNav(btn);
+      window.setTimeout(() => { pointerHandled = false; }, 350);
+    });
     btn.addEventListener("click", () => {
-      if (Date.now() - lastMobileNavTouchAt < 450) return;
+      if (pointerHandled) return;
       activateNav(btn);
     });
-    btn.addEventListener("touchend", (event) => {
-      event.preventDefault();
-      lastMobileNavTouchAt = Date.now();
-      activateNav(btn);
-    }, { passive: false });
   });
   $("mobileMenuToggle")?.addEventListener("click", () => setMobileMenu(!$("sidebar")?.classList.contains("is-open")));
   $("mobileMenuBackdrop")?.addEventListener("click", closeMobileMenu);
