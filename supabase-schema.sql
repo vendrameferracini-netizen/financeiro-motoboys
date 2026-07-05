@@ -1,191 +1,14 @@
 -- Financeiro Motoboys - Supabase schema completo
--- Rode este arquivo no Supabase SQL Editor.
--- Depois crie os usuarios em Authentication > Users com emails:
+-- Execute em ordem: Parte 1, Parte 2, Parte 3 e Parte 4.
+-- Primeiro crie os usuarios no Supabase Auth, se ainda nao existirem:
 -- admin@financeiro.local, gil@financeiro.local, sales@financeiro.local,
--- guilherme@financeiro.local. O trigger abaixo cria/atualiza os perfis.
+-- guilherme@financeiro.local.
+
+-- =========================================================
+-- PARTE 1/4 - Extensao e tabelas
+-- =========================================================
 
 create extension if not exists pgcrypto;
-
--- =========================================================
--- Helpers de seguranca, normalizacao e quinzena
--- =========================================================
-
-create or replace function public.normalize_responsible(input text)
-returns text
-language plpgsql
-immutable
-as $$
-declare
-  v text := lower(trim(coalesce(input, 'BASE')));
-begin
-  v := replace(replace(replace(v, '.', ''), '-', ''), '_', '');
-
-  if v in ('admin', 'administrador') then
-    return 'admin';
-  elsif v in ('gil') then
-    return 'GIL';
-  elsif v in ('sales', 'salles') then
-    return 'SALES';
-  elsif v in ('gm', 'g m', 'guilherme', 'guilhermem', 'guilhermemendes', 'guilhermem.') then
-    return 'GUILHERME';
-  elsif v in ('base', 'empresa', 'operacao', 'operação') then
-    return 'BASE';
-  end if;
-
-  return upper(coalesce(input, 'BASE'));
-end;
-$$;
-
-create or replace function public.safe_date(input text)
-returns date
-language plpgsql
-immutable
-as $$
-begin
-  if input is null or trim(input) = '' then
-    return null;
-  end if;
-  return input::date;
-exception when others then
-  return null;
-end;
-$$;
-
-create or replace function public.safe_numeric(input text)
-returns numeric
-language plpgsql
-immutable
-as $$
-declare
-  cleaned text;
-begin
-  if input is null or trim(input) = '' then
-    return null;
-  end if;
-  cleaned := replace(replace(replace(input, 'R$', ''), '.', ''), ',', '.');
-  return trim(cleaned)::numeric;
-exception when others then
-  return null;
-end;
-$$;
-
-create or replace function public.safe_int(input text)
-returns integer
-language plpgsql
-immutable
-as $$
-begin
-  if input is null or trim(input) = '' then
-    return null;
-  end if;
-  return regexp_replace(input, '[^0-9-]', '', 'g')::integer;
-exception when others then
-  return null;
-end;
-$$;
-
-create or replace function public.fortnight_start(input_date date)
-returns date
-language sql
-immutable
-as $$
-  select case
-    when input_date is null then null
-    when extract(day from input_date)::int <= 15 then date_trunc('month', input_date)::date
-    else (date_trunc('month', input_date)::date + interval '15 day')::date
-  end;
-$$;
-
-create or replace function public.fortnight_end(input_date date)
-returns date
-language sql
-immutable
-as $$
-  select case
-    when input_date is null then null
-    when extract(day from input_date)::int <= 15 then (date_trunc('month', input_date)::date + interval '14 day')::date
-    else (date_trunc('month', input_date)::date + interval '1 month - 1 day')::date
-  end;
-$$;
-
-create or replace function public.fortnight_label(start_date date, end_date date)
-returns text
-language sql
-immutable
-as $$
-  select case
-    when start_date is null or end_date is null then null
-    when extract(day from start_date)::int = 1 then '1ª quinzena ' || to_char(start_date, 'MM/YYYY')
-    else '2ª quinzena ' || to_char(start_date, 'MM/YYYY')
-  end;
-$$;
-
-create or replace function public.variable_expense_discount_start(expense_date date)
-returns date
-language sql
-immutable
-as $$
-  select case
-    when expense_date is null then null
-    when extract(day from expense_date)::int <= 15
-      then (date_trunc('month', expense_date)::date + interval '15 day')::date
-    else (date_trunc('month', expense_date)::date + interval '1 month')::date
-  end;
-$$;
-
-create or replace function public.variable_expense_discount_end(expense_date date)
-returns date
-language sql
-immutable
-as $$
-  select case
-    when expense_date is null then null
-    when extract(day from expense_date)::int <= 15
-      then (date_trunc('month', expense_date)::date + interval '1 month - 1 day')::date
-    else (date_trunc('month', expense_date)::date + interval '1 month 14 day')::date
-  end;
-$$;
-
-create or replace function public.current_profile_role()
-returns text
-language sql
-security definer
-set search_path = public
-stable
-as $$
-  select coalesce(
-    (select role from public.profiles where id = auth.uid()),
-    'anon'
-  );
-$$;
-
-create or replace function public.is_admin()
-returns boolean
-language sql
-security definer
-set search_path = public
-stable
-as $$
-  select public.current_profile_role() = 'admin';
-$$;
-
-create or replace function public.can_write_responsible(target text)
-returns boolean
-language sql
-security definer
-set search_path = public
-stable
-as $$
-  select case
-    when public.is_admin() then true
-    when public.normalize_responsible(target) = 'BASE' then false
-    else public.normalize_responsible(target) = public.current_profile_role()
-  end;
-$$;
-
--- =========================================================
--- Tabelas
--- =========================================================
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -417,8 +240,181 @@ create table if not exists public.change_logs (
 );
 
 -- =========================================================
--- Triggers de preparo de dados
+-- PARTE 2/4 - Funcoes
 -- =========================================================
+
+create or replace function public.normalize_responsible(input text)
+returns text
+language plpgsql
+immutable
+as $$
+declare
+  v text := lower(trim(coalesce(input, 'BASE')));
+begin
+  v := replace(replace(replace(v, '.', ''), '-', ''), '_', '');
+
+  if v in ('admin', 'administrador') then
+    return 'admin';
+  elsif v in ('gil') then
+    return 'GIL';
+  elsif v in ('sales', 'salles') then
+    return 'SALES';
+  elsif v in ('gm', 'g m', 'guilherme', 'guilhermem', 'guilhermemendes', 'guilhermem.') then
+    return 'GUILHERME';
+  elsif v in ('base', 'empresa', 'operacao', 'operação') then
+    return 'BASE';
+  end if;
+
+  return upper(coalesce(input, 'BASE'));
+end;
+$$;
+
+create or replace function public.safe_date(input text)
+returns date
+language plpgsql
+immutable
+as $$
+begin
+  if input is null or trim(input) = '' then
+    return null;
+  end if;
+  return input::date;
+exception when others then
+  return null;
+end;
+$$;
+
+create or replace function public.safe_numeric(input text)
+returns numeric
+language plpgsql
+immutable
+as $$
+declare
+  cleaned text;
+begin
+  if input is null or trim(input) = '' then
+    return null;
+  end if;
+  cleaned := replace(replace(replace(input, 'R$', ''), '.', ''), ',', '.');
+  return trim(cleaned)::numeric;
+exception when others then
+  return null;
+end;
+$$;
+
+create or replace function public.safe_int(input text)
+returns integer
+language plpgsql
+immutable
+as $$
+begin
+  if input is null or trim(input) = '' then
+    return null;
+  end if;
+  return regexp_replace(input, '[^0-9-]', '', 'g')::integer;
+exception when others then
+  return null;
+end;
+$$;
+
+create or replace function public.fortnight_start(input_date date)
+returns date
+language sql
+immutable
+as $$
+  select case
+    when input_date is null then null
+    when extract(day from input_date)::int <= 15 then date_trunc('month', input_date)::date
+    else (date_trunc('month', input_date)::date + interval '15 day')::date
+  end;
+$$;
+
+create or replace function public.fortnight_end(input_date date)
+returns date
+language sql
+immutable
+as $$
+  select case
+    when input_date is null then null
+    when extract(day from input_date)::int <= 15 then (date_trunc('month', input_date)::date + interval '14 day')::date
+    else (date_trunc('month', input_date)::date + interval '1 month - 1 day')::date
+  end;
+$$;
+
+create or replace function public.fortnight_label(start_date date, end_date date)
+returns text
+language sql
+immutable
+as $$
+  select case
+    when start_date is null or end_date is null then null
+    when extract(day from start_date)::int = 1 then '1ª quinzena ' || to_char(start_date, 'MM/YYYY')
+    else '2ª quinzena ' || to_char(start_date, 'MM/YYYY')
+  end;
+$$;
+
+create or replace function public.variable_expense_discount_start(expense_date date)
+returns date
+language sql
+immutable
+as $$
+  select case
+    when expense_date is null then null
+    when extract(day from expense_date)::int <= 15
+      then (date_trunc('month', expense_date)::date + interval '15 day')::date
+    else (date_trunc('month', expense_date)::date + interval '1 month')::date
+  end;
+$$;
+
+create or replace function public.variable_expense_discount_end(expense_date date)
+returns date
+language sql
+immutable
+as $$
+  select case
+    when expense_date is null then null
+    when extract(day from expense_date)::int <= 15
+      then (date_trunc('month', expense_date)::date + interval '1 month - 1 day')::date
+    else (date_trunc('month', expense_date)::date + interval '1 month 14 day')::date
+  end;
+$$;
+
+create or replace function public.current_profile_role()
+returns text
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce(
+    (select role from public.profiles where id = auth.uid()),
+    'anon'
+  );
+$$;
+
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select public.current_profile_role() = 'admin';
+$$;
+
+create or replace function public.can_write_responsible(target text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select case
+    when public.is_admin() then true
+    when public.normalize_responsible(target) = 'BASE' then false
+    else public.normalize_responsible(target) = public.current_profile_role()
+  end;
+$$;
 
 create or replace function public.touch_updated_at()
 returns trigger
@@ -648,7 +644,7 @@ end;
 $$;
 
 -- =========================================================
--- Triggers por tabela
+-- PARTE 3/4 - Triggers, perfis iniciais e indices
 -- =========================================================
 
 drop trigger if exists trg_profiles_touch on public.profiles;
@@ -733,7 +729,6 @@ drop trigger if exists trg_backups_audit on public.backups;
 create trigger trg_backups_actor before insert on public.backups for each row execute function public.apply_default_actor();
 create trigger trg_backups_audit after insert or update or delete on public.backups for each row execute function public.audit_row_change();
 
--- Backfill de perfis para usuarios Auth ja existentes.
 insert into public.profiles(id, username, role, full_name)
 select
   u.id,
@@ -754,10 +749,6 @@ on conflict (id) do update
       full_name = excluded.full_name,
       updated_at = now();
 
--- =========================================================
--- Indices
--- =========================================================
-
 create index if not exists idx_profiles_role on public.profiles(role);
 create index if not exists idx_motoboys_name on public.motoboys(name);
 create index if not exists idx_motoboys_status on public.motoboys(status);
@@ -774,7 +765,6 @@ create index if not exists idx_payments_owner_period on public.payments(owner, p
 create index if not exists idx_receipts_owner_period on public.receipts(owner, period_start, period_end);
 create index if not exists idx_change_logs_table_record on public.change_logs(table_name, record_id);
 create index if not exists idx_change_logs_created_at on public.change_logs(created_at desc);
-
 create index if not exists idx_motoboys_data_gin on public.motoboys using gin(data);
 create index if not exists idx_daily_data_gin on public.daily_launches using gin(data);
 create index if not exists idx_package_data_gin on public.package_entries using gin(data);
@@ -782,7 +772,7 @@ create index if not exists idx_discounts_data_gin on public.discounts using gin(
 create index if not exists idx_expenses_data_gin on public.expenses using gin(data);
 
 -- =========================================================
--- RLS
+-- PARTE 4/4 - RLS, policies, views e grants
 -- =========================================================
 
 alter table public.profiles enable row level security;
@@ -884,10 +874,6 @@ drop policy if exists change_logs_admin_delete on public.change_logs;
 create policy change_logs_select_all on public.change_logs for select to authenticated using (true);
 create policy change_logs_insert_authenticated on public.change_logs for insert to authenticated with check (true);
 create policy change_logs_admin_delete on public.change_logs for delete to authenticated using (public.is_admin());
-
--- =========================================================
--- Views para dashboard/relatorios
--- =========================================================
 
 create or replace view public.v_variable_expenses_by_discount_period as
 select
