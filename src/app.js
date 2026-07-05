@@ -2324,10 +2324,26 @@ async function migrateLocalToSupabase() {
     return;
   }
   const reportTarget = $("backupMigrationReport");
-  const setMigrationReport = (message, counts = null, type = "ok") => {
+  const setMigrationReport = (message, counts = null, type = "ok", errors = []) => {
     if (reportTarget) {
-      const countRows = counts ? Object.entries(counts).map(([name, value]) => [name, num(value)]) : [];
-      reportTarget.innerHTML = `<div class="feedback ${type}">${escapeHtml(message)}</div>${countRows.length ? tableBlock("Progresso da migracao", ["Tipo", "Quantidade"], countRows) : ""}`;
+      const labels = {
+        motoboys: "Motoboys migrados",
+        entradas: "Entradas migradas",
+        lancamentos: "Lancamentos migrados",
+        descontos: "Descontos migrados",
+        despesas: "Despesas migradas",
+        pagamentos: "Pagamentos migrados",
+        recibos: "Recibos migrados",
+        configuracoes: "Configuracoes migradas"
+      };
+      const countRows = counts ? Object.entries(labels).map(([name, label]) => {
+        const failed = errors.some((error) => error.key === name || error.bucket === name);
+        const marker = failed ? "Falhou" : "✓";
+        const value = name === "configuracoes" ? (counts[name] ? "sim" : "pendente") : num(counts[name] || 0);
+        return [`${marker} ${label}`, value];
+      }) : [];
+      const errorRows = errors.map((error) => [error.table || error.bucket || "", error.message || "Erro desconhecido"]);
+      reportTarget.innerHTML = `<div class="feedback ${type}">${escapeHtml(message)}</div>${countRows.length ? tableBlock("Resultado da migracao", ["Etapa", "Resultado"], countRows) : ""}${errorRows.length ? tableBlock("Tabelas com erro", ["Tabela", "Erro"], errorRows) : ""}`;
     }
     showBackupFeedback(message, type);
   };
@@ -2342,30 +2358,50 @@ async function migrateLocalToSupabase() {
   }
   if (!window.confirm(`${localMigrationSummaryText(source, snapshot.key)}\n\nMigrar estes dados locais para o Supabase agora?\n\nOs registros com o mesmo ID serao atualizados, sem duplicar. O localStorage nao sera apagado.`)) return;
   try {
+    const migratedCounts = { motoboys: 0, entradas: 0, lancamentos: 0, descontos: 0, despesas: 0, pagamentos: 0, recibos: 0, configuracoes: 0 };
+    const migrationErrors = [];
     setMigrationReport("Migracao iniciada. Lendo Supabase e preparando registros locais...", localMigrationCounts(source), "ok");
-    const cloudBefore = await loadCloudState(defaultState());
+    let cloudBefore = defaultState();
+    try {
+      cloudBefore = await loadCloudState(defaultState());
+    } catch (error) {
+      migrationErrors.push({ key: "leitura", bucket: "leitura", table: "loadCloudState", message: error.message || String(error) });
+    }
     const merged = mergeUniqueCloudState(source, cloudBefore);
-    const migratedCounts = { motoboys: 0, entradas: 0, lancamentos: 0, descontos: 0, despesas: 0, pagamentos: 0, recibos: 0 };
     const buckets = [
-      ["riders", source.riders, "motoboys"],
-      ["baseEntries", source.baseEntries, "entradas"],
-      ["daily", source.daily, "lancamentos"],
-      ["discounts", source.discounts, "descontos"],
-      ["expenses", source.expenses, "despesas"],
-      ["payments", source.payments, "pagamentos"],
-      ["receipts", source.receipts, "recibos"]
+      ["riders", source.riders, "motoboys", "motoboys"],
+      ["baseEntries", source.baseEntries, "entradas", "package_entries"],
+      ["daily", source.daily, "lancamentos", "daily_launches"],
+      ["discounts", source.discounts, "descontos", "discounts"],
+      ["expenses", source.expenses, "despesas", "expenses"],
+      ["payments", source.payments, "pagamentos", "payments"],
+      ["receipts", source.receipts, "recibos", "receipts"]
     ];
-    for (const [bucket, records] of buckets) {
-      const countKey = buckets.find((item) => item[0] === bucket)?.[2];
-      setMigrationReport(`Migrando ${countKey}...`, migratedCounts, "ok");
+    for (const [bucket, records, countKey, table] of buckets) {
+      setMigrationReport(`Migrando ${countKey}...`, migratedCounts, "ok", migrationErrors);
       for (const record of records || []) {
-        await persistRecord(bucket, record);
-        migratedCounts[countKey] += 1;
+        try {
+          const saved = await saveCloudRecord(bucket, record);
+          Object.assign(record, saved);
+          migratedCounts[countKey] += 1;
+        } catch (error) {
+          migrationErrors.push({ key: countKey, bucket: countKey, table, message: error.message || String(error) });
+        }
       }
     }
-    setMigrationReport("Salvando configuracoes e recarregando dados do Supabase...", migratedCounts, "ok");
-    await saveCloudSettings(merged);
-    state = await loadCloudState(defaultState());
+    setMigrationReport("Salvando configuracoes e recarregando dados do Supabase...", migratedCounts, "ok", migrationErrors);
+    try {
+      await saveCloudSettings(merged);
+      migratedCounts.configuracoes = 1;
+    } catch (error) {
+      migrationErrors.push({ key: "configuracoes", bucket: "configuracoes", table: "settings", message: error.message || String(error) });
+    }
+    try {
+      state = await loadCloudState(defaultState());
+    } catch (error) {
+      migrationErrors.push({ key: "recarregar", bucket: "recarregar", table: "loadCloudState", message: error.message || String(error) });
+      state = mergeUniqueCloudState(source, state);
+    }
     lastSupabaseSync = new Date().toISOString();
     const status = { migratedAt: new Date().toISOString(), sourceKey: snapshot.key, counts: migratedCounts };
     localStorage.setItem(MIGRATION_MARK_KEY, JSON.stringify(status));
@@ -2374,7 +2410,11 @@ async function migrateLocalToSupabase() {
       $("supabaseFeedback").textContent = "Dados locais migrados para Supabase.";
       $("supabaseFeedback").className = "feedback ok";
     }
-    setMigrationReport("Dados locais migrados para Supabase. Dashboard atualizado com os dados recarregados.", migratedCounts, "ok");
+    const finalType = migrationErrors.length ? "error" : "ok";
+    const finalMessage = migrationErrors.length
+      ? "Migracao concluida parcialmente. Algumas tabelas falharam e estao listadas abaixo."
+      : "Dados locais migrados para Supabase. Dashboard atualizado com os dados recarregados.";
+    setMigrationReport(finalMessage, migratedCounts, finalType, migrationErrors);
     renderSupabaseStatus();
     renderAll();
     renderLocalStorageDiagnostics("dashboardLocalStorageReport");
