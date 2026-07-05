@@ -15,6 +15,16 @@
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
 </head>
 <body>
+  <div id="authGate" class="auth-gate" hidden>
+    <form id="loginForm" class="auth-card">
+      <h1>Financeiro Motoboys</h1>
+      <p>Entre com seu usuario Supabase.</p>
+      <label>Usuario<select id="loginUser"><option value="admin">admin</option><option value="gil">gil</option><option value="sales">sales</option><option value="guilherme">guilherme</option></select></label>
+      <label>Senha<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">Entrar</button>
+      <div id="loginFeedback" class="feedback error" role="status"></div>
+    </form>
+  </div>
   <aside class="sidebar">
     <div class="brand"><span>Financeiro</span><strong>Motoboys</strong></div>
     <nav class="main-nav" aria-label="Menu principal">

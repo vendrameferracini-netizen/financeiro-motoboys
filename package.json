@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
+  },
   "devDependencies": {
     "vite": "^7.0.0"
   }

@@ -218,6 +218,40 @@ th { color: var(--muted); background: #fbfcfd; font-size: 12px; text-transform: 
 
 .receipt { padding: 18px; display: grid; gap: 12px; }
 .receipt h2 { font-size: 22px; }
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(16, 27, 34, .92);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.auth-gate[hidden] { display: none; }
+.auth-card {
+  width: min(420px, 100%);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 22px;
+  display: grid;
+  gap: 12px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.28);
+}
+.auth-card p { color: var(--muted); }
+.supabase-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  background: var(--soft);
+  color: var(--muted);
+}
+.supabase-pill.ok { background: #ecf8f0; color: var(--good); }
+.supabase-pill.bad { background: #fff1f1; color: var(--bad); }
 .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 36px; }
 .signatures span { border-top: 1px solid var(--ink); padding-top: 8px; text-align: center; }
 

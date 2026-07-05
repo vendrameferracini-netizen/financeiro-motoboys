@@ -1,3 +1,18 @@
+import {
+  isSupabaseConfigured,
+  supabase,
+  TABLES,
+  getSupabaseSession,
+  signInSupabase,
+  signOutSupabase,
+  loadCloudState,
+  saveCloudRecord,
+  deleteCloudRecord,
+  saveCloudSettings,
+  saveBackupToCloud,
+  logCloudChange
+} from "./supabaseClient.js";
+
 const workbook = window.EMBEDDED_WORKBOOK || { sheetCount: 0, sheets: [] };
 const syncReport = window.SYNC_REPORT || null;
 const sheets = workbook.sheets || [];
@@ -23,11 +38,16 @@ let editingDiscountId = "";
 let editingExpenseId = "";
 let selectedRider = allRiders()[0]?.name || "";
 let selectedPartner = "GIL";
+let supabaseSession = null;
+let supabaseProfile = null;
+let supabaseOnline = false;
+let lastSupabaseSync = "";
+let localStateForMigration = null;
 
 const $ = (id) => document.getElementById(id);
 
 function defaultState() {
-  return { riders: [], daily: [], baseEntries: [], discounts: [], expenses: [], paid: {}, payments: [], basePaid: {}, config: { ml: 8, shopee: 5, avulso: 0 }, audit: [], cleanOperational: true, lastBackupAt: "" };
+  return { riders: [], daily: [], baseEntries: [], discounts: [], expenses: [], paid: {}, payments: [], receipts: [], basePaid: {}, config: { ml: 8, shopee: 5, avulso: 0 }, audit: [], cleanOperational: true, lastBackupAt: "" };
 }
 
 function normalizeStateData(data) {
@@ -42,6 +62,7 @@ function normalizeStateData(data) {
     discounts: Array.isArray(parsed.discounts) ? parsed.discounts : [],
     expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
     payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+    receipts: Array.isArray(parsed.receipts) ? parsed.receipts : [],
     paid: parsed.paid && typeof parsed.paid === "object" ? parsed.paid : {},
     basePaid: parsed.basePaid && typeof parsed.basePaid === "object" ? parsed.basePaid : {},
     config: { ...defaults.config, ...(parsed.config || {}) },
@@ -61,6 +82,53 @@ function loadState() {
 function saveState(action, detail, meta = null) {
   if (action) state.audit.unshift({ at: new Date().toISOString(), action, detail, ...(meta ? { meta } : {}) });
   localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  if (supabaseOnline && supabaseProfile?.role === "admin") {
+    saveCloudSettings(state)
+      .then(() => logCloudChange(action || "sync", detail || "", meta || {}))
+      .catch((error) => showSupabaseError(error));
+  }
+}
+
+function showSupabaseError(error) {
+  const message = error?.message || "Sem conexão com Supabase. Não foi possível salvar.";
+  console.error(message, error);
+  const target = $("supabaseFeedback");
+  if (target) {
+    target.textContent = message.includes("Supabase") ? message : `Sem conexão com Supabase. Não foi possível salvar. ${message}`;
+    target.className = "feedback error";
+  }
+}
+
+async function persistRecord(bucket, record) {
+  if (!supabaseOnline) {
+    showSupabaseError(new Error("Sem conexão com Supabase. Não foi possível salvar."));
+    return record;
+  }
+  try {
+    if (!record.partner && !record.responsible && !record.owner && supabaseProfile?.role && supabaseProfile.role !== "admin") record.responsible = supabaseProfile.role;
+    const saved = await saveCloudRecord(bucket, record);
+    Object.assign(record, saved);
+    lastSupabaseSync = new Date().toISOString();
+    renderSupabaseStatus();
+    return record;
+  } catch (error) {
+    showSupabaseError(error);
+    return record;
+  }
+}
+
+async function removeCloudRecord(bucket, record) {
+  if (!supabaseOnline) {
+    showSupabaseError(new Error("Sem conexão com Supabase. Não foi possível salvar."));
+    return;
+  }
+  try {
+    await deleteCloudRecord(bucket, record);
+    lastSupabaseSync = new Date().toISOString();
+    renderSupabaseStatus();
+  } catch (error) {
+    showSupabaseError(error);
+  }
 }
 
 function resetOperationalBuckets() {
@@ -70,6 +138,7 @@ function resetOperationalBuckets() {
   state.expenses = [];
   state.paid = {};
   state.payments = [];
+  state.receipts = [];
   state.basePaid = {};
 }
 
@@ -1389,7 +1458,41 @@ function renderAuditV2() {
   $("auditImport").innerHTML += tableBlock("Auditoria completa GUILHERME", ["Aba","Linha","Coluna","Motoboy","Valor","Tipo","Observacao","Status","Motivo"], guilhermeAuditTableRows());
 }
 
-function renderConfig() { $("configMl").value = money(state.config.ml); $("configShopee").value = money(state.config.shopee); $("configAvulso").value = money(state.config.avulso); }
+function ensureSupabasePanel() {
+  if ($("supabaseStatus")) return;
+  const view = $("configuracoes");
+  if (!view) return;
+  view.insertAdjacentHTML("beforeend", `<section class="panel form">
+    <div class="panel-head"><h2>Supabase</h2></div>
+    <div id="supabaseStatus" class="cards"></div>
+    <div id="supabaseFeedback" class="feedback" role="status"></div>
+    <div class="actions">
+      <button id="syncSupabase" type="button">Sincronizar agora</button>
+      <button id="migrateLocalToSupabase" type="button">Migrar dados locais para Supabase</button>
+      <button id="logoutSupabase" type="button">Sair</button>
+    </div>
+  </section>`);
+}
+
+function renderSupabaseStatus() {
+  ensureSupabasePanel();
+  if (!$("supabaseStatus")) return;
+  const status = !isSupabaseConfigured ? "Nao configurado" : supabaseOnline ? "Conectado" : "Desconectado";
+  const user = supabaseProfile?.username || supabaseSession?.user?.email || "Sem login";
+  $("supabaseStatus").innerHTML = [
+    card("Status", status),
+    card("Usuario logado", user),
+    card("Perfil", supabaseProfile?.role || "-"),
+    card("Ultimo sync", lastSupabaseSync ? displayDate(lastSupabaseSync.slice(0, 10)) : "-")
+  ].join("");
+}
+
+function renderConfig() {
+  $("configMl").value = money(state.config.ml);
+  $("configShopee").value = money(state.config.shopee);
+  $("configAvulso").value = money(state.config.avulso);
+  renderSupabaseStatus();
+}
 
 function backupPayload() {
   return {
@@ -1424,7 +1527,9 @@ function downloadJson(filename, data) {
 function exportBackupData() {
   state.lastBackupAt = new Date().toISOString();
   saveState("Backup exportado", "JSON completo dos dados do sistema.");
-  downloadJson(`financeiro-motoboys-backup-${state.lastBackupAt.slice(0, 10)}.json`, backupPayload());
+  const payload = backupPayload();
+  if (supabaseOnline) saveBackupToCloud(payload).catch(showSupabaseError);
+  downloadJson(`financeiro-motoboys-backup-${state.lastBackupAt.slice(0, 10)}.json`, payload);
   showBackupFeedback("Backup exportado com sucesso.", "ok");
   renderBackup();
 }
@@ -1623,6 +1728,7 @@ function saveRiderFromForm() {
   }
   editingRiderId = id;
   selectedRider = row.name;
+  persistRecord("riders", row);
   renderAll();
   return true;
 }
@@ -1637,6 +1743,7 @@ function toggleSelectedRiderStatus() {
   logRiderChange(r.active ? "reativado" : "inativado", previous, riderSnapshot(r));
   selectedRider = r.name;
   editingRiderId = r.id;
+  persistRecord("riders", r);
   showRiderFeedback(r.active ? "Motoboy reativado com sucesso" : "Motoboy inativado com sucesso", "ok");
   renderAll();
   return true;
@@ -1654,10 +1761,12 @@ function removeSelectedRider() {
     logRiderChange("inativado", previous, riderSnapshot(r));
     editingRiderId = r.id;
     selectedRider = r.name;
+    persistRecord("riders", r);
     showRiderFeedback("Motoboy inativado com sucesso", "ok");
   } else {
     state.riders = state.riders.filter((x) => x.id !== r.id);
     logRiderChange("removido", previous, null);
+    removeCloudRecord("riders", r);
     editingRiderId = "";
     selectedRider = allRiders()[0]?.name || "";
     showRiderFeedback("Motoboy removido com sucesso", "ok");
@@ -1728,7 +1837,100 @@ function fillDefaults() { const today = new Date().toISOString().slice(0, 10); [
 function switchView(id) { document.querySelectorAll(".nav-item, .view").forEach((el) => el.classList.remove("active")); document.querySelector(`.nav-item[data-view="${id}"]`)?.classList.add("active"); $(id)?.classList.add("active"); $("viewTitle").textContent = document.querySelector(`.nav-item[data-view="${id}"]`)?.textContent || "Dashboard"; }
 function addMoneyBlur(ids) { ids.forEach((id) => $(id).addEventListener("blur", () => { $(id).value = money(parseMoney($(id).value)); updateDailyGross(); })); }
 
+function showAuthGate(show, message = "") {
+  const gate = $("authGate");
+  if (!gate) return;
+  gate.hidden = !show;
+  if ($("loginFeedback")) $("loginFeedback").textContent = message;
+}
+
+async function syncFromSupabase() {
+  if (!isSupabaseConfigured) {
+    supabaseOnline = false;
+    showSupabaseError(new Error("VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY nao configuradas."));
+    renderSupabaseStatus();
+    return false;
+  }
+  const sessionInfo = await getSupabaseSession();
+  supabaseSession = sessionInfo.session;
+  supabaseProfile = sessionInfo.profile;
+  if (!supabaseSession) {
+    supabaseOnline = false;
+    showAuthGate(true, sessionInfo.error || "Entre para sincronizar com Supabase.");
+    renderSupabaseStatus();
+    return false;
+  }
+  try {
+    if (!localStateForMigration) {
+      try { localStateForMigration = normalizeStateData(JSON.parse(localStorage.getItem(STORE_KEY) || "{}")); } catch { localStateForMigration = normalizeStateData(state); }
+    }
+    const defaults = defaultState();
+    state = await loadCloudState(defaults);
+    supabaseOnline = true;
+    lastSupabaseSync = new Date().toISOString();
+    showAuthGate(false);
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    return true;
+  } catch (error) {
+    supabaseOnline = false;
+    showSupabaseError(error);
+    return false;
+  } finally {
+    renderSupabaseStatus();
+  }
+}
+
+async function migrateLocalToSupabase() {
+  if (!supabaseOnline) {
+    showSupabaseError(new Error("Sem conexão com Supabase. Não foi possível salvar."));
+    return;
+  }
+  if (!window.confirm("Migrar os dados locais atuais para o Supabase? Registros com o mesmo ID serão atualizados.")) return;
+  const source = localStateForMigration || state;
+  const buckets = [["riders", source.riders], ["daily", source.daily], ["baseEntries", source.baseEntries], ["discounts", source.discounts], ["expenses", source.expenses], ["payments", source.payments], ["receipts", source.receipts]];
+  try {
+    for (const [bucket, records] of buckets) {
+      for (const record of records || []) await persistRecord(bucket, record);
+    }
+    await saveCloudSettings(source);
+    state = await loadCloudState(defaultState());
+    lastSupabaseSync = new Date().toISOString();
+    $("supabaseFeedback").textContent = "Dados locais migrados para Supabase.";
+    $("supabaseFeedback").className = "feedback ok";
+    renderSupabaseStatus();
+  } catch (error) {
+    showSupabaseError(error);
+  }
+}
+
+async function initSupabaseApp() {
+  ensureSupabasePanel();
+  if (!isSupabaseConfigured) {
+    supabaseOnline = false;
+    showAuthGate(false);
+    renderSupabaseStatus();
+    return;
+  }
+  await syncFromSupabase();
+  if (supabase) {
+    supabase.auth.onAuthStateChange(async () => {
+      await syncFromSupabase();
+      renderAll();
+    });
+  }
+}
+
 function bindEvents() {
+  $("loginForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await signInSupabase($("loginUser").value, $("loginPassword").value);
+      await syncFromSupabase();
+      renderAll();
+    } catch (error) {
+      $("loginFeedback").textContent = error.message || "Falha ao entrar.";
+    }
+  });
   document.querySelectorAll(".nav-item").forEach((btn) => btn.addEventListener("click", () => switchView(btn.dataset.view)));
   ["quickSearch", "periodFilter", "statusFilter"].forEach((id) => $(id).addEventListener("input", renderAll));
   ["baseMl", "baseShopee"].forEach((id) => $(id).addEventListener("input", updateBaseTotals));
@@ -1745,9 +1947,9 @@ function bindEvents() {
   $("newRider").addEventListener("click", clearRiderForm);
   $("toggleRider").addEventListener("click", toggleSelectedRiderStatus);
   $("removeRider").addEventListener("click", removeSelectedRider);
-  $("baseForm").addEventListener("submit", (e) => { e.preventDefault(); const row = baseEntryCalc({ id: uid("base"), source: "manual", date: $("baseDate").value, partner: $("basePartner").value, ml: Number($("baseMl").value || 0), shopee: Number($("baseShopee").value || 0), note: $("baseNote").value.trim(), responsible: $("baseResponsible").value.trim() }); if (!confirmDuplicate(state.baseEntries, row)) return; state.baseEntries.unshift(row); saveState("Entrada de base", row.partner); renderAll(); });
-  $("dailyForm").addEventListener("submit", (e) => { e.preventDefault(); const row = { id: uid("daily"), source: "manual", date: $("dailyDate").value, rider: $("dailyRider").value, dailyType: $("dailyType").value, ml: Number($("dailyMl").value || 0), shopee: Number($("dailyShopee").value || 0), avulso: Number($("dailyAvulso").value || 0), rateMl: parseMoney($("dailyRateMl").value), rateShopee: parseMoney($("dailyRateShopee").value), rateAvulso: parseMoney($("dailyRateAvulso").value), gross: parseMoney($("dailyGross").value), responsible: $("dailyResponsible").value.trim(), note: $("dailyNote").value.trim() }; if (!confirmDuplicate(state.daily, row)) return; state.daily.unshift(row); saveState("Lançamento diário", `${row.rider} - ${workTypeLabel(row.dailyType)}`); renderAll(); });
-  $("discountForm").addEventListener("submit", (e) => { e.preventDefault(); e.stopImmediatePropagation(); const id = editingDiscountId || uid("disc"); const row = { id, source: "manual", date: $("discountDate").value, partner: $("discountPartner").value, rider: $("discountRider").value, closingRider: $("discountRider").value, riderMatched: true, type: $("discountType").value, value: parseMoney($("discountValue").value), code: $("discountCode").value.trim(), reason: $("discountReason").value.trim(), note: $("discountNote").value.trim(), observation: $("discountNote").value.trim() || $("discountReason").value.trim(), sheetOriginal: "LANCAMENTO MANUAL", lineOriginal: "", columnOriginal: "", origin: "LANCAMENTO MANUAL" }; row.importKey = uniqueKey([row.partner, row.rider, row.type, moneyKey(row.value), row.observation, row.id]); if (!confirmDuplicate(state.discounts, row, editingDiscountId)) return; const idx = state.discounts.findIndex((x) => x.id === id); if (idx >= 0) state.discounts[idx] = row; else state.discounts.unshift(row); editingDiscountId = ""; saveState("Desconto", `${row.partner} -> ${row.rider}`); renderAll(); }, true);
+  $("baseForm").addEventListener("submit", (e) => { e.preventDefault(); const row = baseEntryCalc({ id: uid("base"), source: "manual", date: $("baseDate").value, partner: $("basePartner").value, ml: Number($("baseMl").value || 0), shopee: Number($("baseShopee").value || 0), note: $("baseNote").value.trim(), responsible: $("baseResponsible").value.trim() }); if (!confirmDuplicate(state.baseEntries, row)) return; state.baseEntries.unshift(row); persistRecord("baseEntries", row); saveState("Entrada de base", row.partner); renderAll(); });
+  $("dailyForm").addEventListener("submit", (e) => { e.preventDefault(); const row = { id: uid("daily"), source: "manual", date: $("dailyDate").value, rider: $("dailyRider").value, dailyType: $("dailyType").value, ml: Number($("dailyMl").value || 0), shopee: Number($("dailyShopee").value || 0), avulso: Number($("dailyAvulso").value || 0), rateMl: parseMoney($("dailyRateMl").value), rateShopee: parseMoney($("dailyRateShopee").value), rateAvulso: parseMoney($("dailyRateAvulso").value), gross: parseMoney($("dailyGross").value), responsible: $("dailyResponsible").value.trim(), note: $("dailyNote").value.trim() }; if (!confirmDuplicate(state.daily, row)) return; state.daily.unshift(row); persistRecord("daily", row); saveState("Lançamento diário", `${row.rider} - ${workTypeLabel(row.dailyType)}`); renderAll(); });
+  $("discountForm").addEventListener("submit", (e) => { e.preventDefault(); e.stopImmediatePropagation(); const id = editingDiscountId || uid("disc"); const row = { id, source: "manual", date: $("discountDate").value, partner: $("discountPartner").value, rider: $("discountRider").value, closingRider: $("discountRider").value, riderMatched: true, type: $("discountType").value, value: parseMoney($("discountValue").value), code: $("discountCode").value.trim(), reason: $("discountReason").value.trim(), note: $("discountNote").value.trim(), observation: $("discountNote").value.trim() || $("discountReason").value.trim(), sheetOriginal: "LANCAMENTO MANUAL", lineOriginal: "", columnOriginal: "", origin: "LANCAMENTO MANUAL" }; row.importKey = uniqueKey([row.partner, row.rider, row.type, moneyKey(row.value), row.observation, row.id]); if (!confirmDuplicate(state.discounts, row, editingDiscountId)) return; const idx = state.discounts.findIndex((x) => x.id === id); if (idx >= 0) state.discounts[idx] = row; else state.discounts.unshift(row); editingDiscountId = ""; persistRecord("discounts", row); saveState("Desconto", `${row.partner} -> ${row.rider}`); renderAll(); }, true);
   $("riderList").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-rider]");
     if (!btn) return;
@@ -1773,8 +1975,8 @@ function bindEvents() {
     switchView("recibos");
     renderReceipts(btn.dataset.freelancerReceipt);
   });
-  $("baseRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-base]"); if (!btn) return; const row = state.baseEntries.find((x) => x.id === btn.dataset.removeBase); if (!row || !window.confirm("Remover esta entrada de base?")) return; state.baseEntries = state.baseEntries.filter((x) => x.id !== row.id); saveState("Entrada de base removida", row.partner); renderAll(); });
-  $("dailyRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-daily]"); if (!btn) return; const row = state.daily.find((x) => x.id === btn.dataset.removeDaily); if (!row || !window.confirm("Remover este lançamento diário?")) return; state.daily = state.daily.filter((x) => x.id !== row.id); saveState("Lançamento diário removido", row.rider); renderAll(); });
+  $("baseRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-base]"); if (!btn) return; const row = state.baseEntries.find((x) => x.id === btn.dataset.removeBase); if (!row || !window.confirm("Remover esta entrada de base?")) return; state.baseEntries = state.baseEntries.filter((x) => x.id !== row.id); removeCloudRecord("baseEntries", row); saveState("Entrada de base removida", row.partner); renderAll(); });
+  $("dailyRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-daily]"); if (!btn) return; const row = state.daily.find((x) => x.id === btn.dataset.removeDaily); if (!row || !window.confirm("Remover este lançamento diário?")) return; state.daily = state.daily.filter((x) => x.id !== row.id); removeCloudRecord("daily", row); saveState("Lançamento diário removido", row.rider); renderAll(); });
   const discountClick = (e) => {
     const edit = e.target.closest("button[data-edit-discount]");
     const remove = e.target.closest("button[data-remove-discount]");
@@ -1796,6 +1998,7 @@ function bindEvents() {
       const row = state.discounts.find((x) => x.id === remove.dataset.removeDiscount);
       if (!row || !window.confirm("Remover este desconto?")) return;
       state.discounts = state.discounts.filter((x) => x.id !== row.id);
+      removeCloudRecord("discounts", row);
       saveState("Desconto removido", `${row.partner} -> ${row.rider}`);
       renderAll();
     }
@@ -1821,6 +2024,7 @@ function bindEvents() {
     const idx = state.expenses.findIndex((x) => x.id === id);
     if (idx >= 0) state.expenses[idx] = row; else state.expenses.unshift(row);
     editingExpenseId = "";
+    persistRecord("expenses", row);
     saveState("Despesa", `${row.type} ${row.category}`);
     renderAll();
   });
@@ -1855,6 +2059,7 @@ function bindEvents() {
       const row = state.expenses.find((x) => x.id === remove.dataset.removeExpense);
       if (!row || !window.confirm("Remover esta despesa?")) return;
       state.expenses = state.expenses.filter((x) => x.id !== row.id);
+      removeCloudRecord("expenses", row);
       saveState("Despesa removida", row.category);
       renderAll();
     }
@@ -1864,9 +2069,12 @@ function bindEvents() {
   $("closingType").addEventListener("change", renderClosings); $("closingRider").addEventListener("change", renderClosings);
   $("closingRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-receipt]"); if (btn) { switchView("recibos"); renderReceipts(btn.dataset.receipt); } });
   $("receiptRider").addEventListener("change", () => renderReceipts()); $("receiptClosing").addEventListener("change", () => renderReceipts());
-  $("markPaid").addEventListener("click", () => { const c = closingRecords().find((x) => x.id === $("receiptClosing").value); if (!c) return; const partner = $("paymentPartner").value; const date = $("paymentDate").value || new Date().toISOString().slice(0, 10); const value = parseMoney($("paymentValue").value) || c.net; const note = $("paymentNote").value.trim(); state.paid[c.id] = { date, net: value, partner, note }; state.payments.unshift({ id: uid("pay"), closingId: c.id, rider: c.rider, partner, date, value, note }); const disc = { id: uid("pay-vale"), source: "manual", date, partner, rider: c.rider, closingRider: c.rider, riderMatched: true, type: "Vale", value, code: "", reason: "Pagamento de motoboy", note, observation: note || "Vale/adiantamento gerado pelo pagamento", sheetOriginal: "PAGAMENTO", lineOriginal: "", columnOriginal: "", origin: "PAGAMENTO" }; disc.importKey = uniqueKey([disc.partner, disc.rider, disc.type, moneyKey(disc.value), disc.observation, disc.id]); state.discounts.unshift(disc); saveState("Fechamento pago", `${c.rider} por ${partner}`); renderAll(); });
+  $("markPaid").addEventListener("click", () => { const c = closingRecords().find((x) => x.id === $("receiptClosing").value); if (!c) return; const partner = $("paymentPartner").value; const date = $("paymentDate").value || new Date().toISOString().slice(0, 10); const value = parseMoney($("paymentValue").value) || c.net; const note = $("paymentNote").value.trim(); state.paid[c.id] = { date, net: value, partner, note }; const payment = { id: uid("pay"), closingId: c.id, rider: c.rider, partner, date, value, note }; state.payments.unshift(payment); persistRecord("payments", payment); const receipt = { id: uid("receipt"), closingId: c.id, rider: c.rider, partner, date, value, note, html: receiptHtml(c) }; state.receipts.unshift(receipt); persistRecord("receipts", receipt); const disc = { id: uid("pay-vale"), source: "manual", date, partner, rider: c.rider, closingRider: c.rider, riderMatched: true, type: "Vale", value, code: "", reason: "Pagamento de motoboy", note, observation: note || "Vale/adiantamento gerado pelo pagamento", sheetOriginal: "PAGAMENTO", lineOriginal: "", columnOriginal: "", origin: "PAGAMENTO" }; disc.importKey = uniqueKey([disc.partner, disc.rider, disc.type, moneyKey(disc.value), disc.observation, disc.id]); state.discounts.unshift(disc); persistRecord("discounts", disc); saveState("Fechamento pago", `${c.rider} por ${partner}`); renderAll(); });
   $("printReceipt").addEventListener("click", () => window.print());
   $("saveConfig").addEventListener("click", () => { state.config = { ml: parseMoney($("configMl").value), shopee: parseMoney($("configShopee").value), avulso: parseMoney($("configAvulso").value) }; saveState("Configuração", "Valores padrão"); renderAll(); });
+  $("syncSupabase")?.addEventListener("click", async () => { await syncFromSupabase(); renderAll(); });
+  $("migrateLocalToSupabase")?.addEventListener("click", migrateLocalToSupabase);
+  $("logoutSupabase")?.addEventListener("click", async () => { await signOutSupabase(); supabaseOnline = false; supabaseSession = null; supabaseProfile = null; showAuthGate(isSupabaseConfigured, "Sessao encerrada."); renderSupabaseStatus(); });
   $("clearOperational")?.addEventListener("click", () => {
     if (!window.confirm("Limpar lançamentos operacionais? Cadastros de motoboys, valores e regras serão preservados.")) return;
     resetOperationalBuckets();
@@ -1902,7 +2110,9 @@ function bindEvents() {
 
 function exportExcel() { const blob = new Blob([`<!doctype html><html><meta charset="utf-8"><body>${document.querySelector(".view.active").innerHTML}</body></html>`], { type: "application/vnd.ms-excel;charset=utf-8" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "financeiro-motoboys.xls"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
 
+ensureSupabasePanel();
 bindEvents();
+await initSupabaseApp();
 renderAll();
 fillDefaults();
 
