@@ -52,6 +52,23 @@ function profileFromEmail(user) {
   };
 }
 
+function reconcileProfileWithEmail(profile, user) {
+  const fallback = profileFromEmail(user);
+  if (!profile) return fallback;
+  const emailRole = fallback.role;
+  const profileRole = normalizeOwner(profile.role);
+  if (emailRole !== "BASE" && profileRole === "BASE") {
+    return {
+      ...profile,
+      username: profile.username || fallback.username,
+      role: emailRole,
+      full_name: profile.full_name || fallback.full_name,
+      active: profile.active !== false
+    };
+  }
+  return profile;
+}
+
 export function ownerFromRecord(record = {}) {
   return normalizeOwner(record.partner || record.responsible || record.basePartner || record.owner || "BASE");
 }
@@ -138,7 +155,7 @@ export async function getSupabaseSession() {
   if (error || !data.session) return { session: data?.session || null, profile: null, error: error?.message || "" };
   const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", data.session.user.id).maybeSingle();
   if (profileError) return { session: data.session, profile: profileFromEmail(data.session.user), error: profileError.message || "" };
-  return { session: data.session, profile: profile || profileFromEmail(data.session.user), error: "" };
+  return { session: data.session, profile: reconcileProfileWithEmail(profile, data.session.user), error: "" };
 }
 
 export async function signInSupabase(login, password) {
