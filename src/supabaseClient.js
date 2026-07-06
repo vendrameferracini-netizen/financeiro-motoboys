@@ -272,7 +272,11 @@ export async function loadCloudState(defaultState) {
   if (!supabase) throw new Error("Supabase nao configurado.");
   const next = { ...defaultState, riders: [], daily: [], baseEntries: [], discounts: [], expenses: [], payments: [], receipts: [] };
   await Promise.all(Object.entries(TABLES).map(async ([bucket, table]) => {
-    const { data, error } = await supabase.from(table).select("*").order("created_at", { ascending: false });
+    const query = supabase.from(table).select("*");
+    const orderedQuery = table === "motoboys"
+      ? query.order("name", { ascending: true })
+      : query.order("created_at", { ascending: false });
+    const { data, error } = await orderedQuery;
     if (error) throw error;
     next[bucket] = (data || []).map(rowToRecord);
   }));

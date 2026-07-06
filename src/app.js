@@ -209,6 +209,9 @@ function initializeWorkbookData() {
 
 function uid(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 function normalize(text) { return String(text || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
+function riderDisplayName(row = {}) { return String(row.name || row.nome || row.rider || row.motoboy || row.motoboyName || "").trim(); }
+function compareRiderName(a, b) { return riderDisplayName(a).localeCompare(riderDisplayName(b), "pt-BR", { sensitivity: "base" }); }
+function sortByRiderName(rows = []) { return [...rows].sort(compareRiderName); }
 function managerAlias(text) {
   const key = normalize(text).replace(/[^a-z0-9]+/g, " ").trim();
   if (!key) return "";
@@ -639,14 +642,14 @@ function uniqueRecords(list, keyFn) {
     return true;
   });
 }
-function allDaily() { return uniqueRecords([...imported.daily, ...state.daily].filter((x) => !isInvalidRiderName(x.rider)), (x) => uniqueKey([x.sheetOriginal || "manual", x.date, x.rider, x.ml, x.shopee, x.valueMl, x.valueShopee, x.gross])); }
+function allDaily() { return sortByRiderName(uniqueRecords([...imported.daily, ...state.daily].filter((x) => !isInvalidRiderName(x.rider)), (x) => uniqueKey([x.sheetOriginal || "manual", x.date, x.rider, x.ml, x.shopee, x.valueMl, x.valueShopee, x.gross]))); }
 function allBaseEntries() { return uniqueRecords([...imported.baseEntries, ...state.baseEntries], (x) => uniqueKey([x.partner, x.date, x.ml, x.shopee])); }
 function isValidDiscountLabel(label) {
   const value = String(label || "").trim();
   return Boolean(value) && !isNumericLike(value) && !isExcelSerialLike(value) && !isTotalText(value) && !/^(nome|data|vale|valor|motorista)$/i.test(value);
 }
-function allDiscounts() { return uniqueRecords([...imported.discounts, ...state.discounts].filter((x) => isValidDiscountLabel(x.rider) && Number(x.value) > 0), (x) => uniqueKey([x.partner || "BASE", x.rider, x.type, moneyKey(x.value), x.lineOriginal, x.columnOriginal, x.sheetOriginal || x.origin || "manual"])); }
-function allRiders() { return (state.riders || []).filter((x) => !isInvalidRiderName(x.name)); }
+function allDiscounts() { return sortByRiderName(uniqueRecords([...imported.discounts, ...state.discounts].filter((x) => isValidDiscountLabel(x.rider) && Number(x.value) > 0), (x) => uniqueKey([x.partner || "BASE", x.rider, x.type, moneyKey(x.value), x.lineOriginal, x.columnOriginal, x.sheetOriginal || x.origin || "manual"]))); }
+function allRiders() { return sortByRiderName((state.riders || []).filter((x) => !isInvalidRiderName(x.name))); }
 function activeRiders() { return allRiders().filter((x) => x.active !== false); }
 function riderByName(name) { return allRiders().find((x) => normalize(x.name) === normalize(name)); }
 function riderWorkType(rider) {
@@ -929,7 +932,7 @@ function closingRecords(type = "quinzenal") {
     else row.discounts += x.value;
   });
   imported.payments.forEach((p) => { if (isInvalidRiderName(p.name)) return; if (![...groups.values()].some((g) => normalize(g.rider) === normalize(p.name))) { const row = ensure(p.name, "2026-06-15"); if (!row) return; row.ml = p.packages; row.gross = p.gross; row.discounts = p.discounts; } });
-  return [...groups.values()].map((row) => ({ ...row, net: row.gross - row.vales - row.losses - row.discounts + row.bonuses, status: state.paid[row.id] ? "pago" : row.status, paymentDate: state.paid[row.id]?.date || "" })).sort((a, b) => a.rider.localeCompare(b.rider, "pt-BR"));
+  return [...groups.values()].map((row) => ({ ...row, net: row.gross - row.vales - row.losses - row.discounts + row.bonuses, status: state.paid[row.id] ? "pago" : row.status, paymentDate: state.paid[row.id]?.date || "" })).sort(compareRiderName);
 }
 
 function baseClosingRecords() {
