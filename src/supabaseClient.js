@@ -34,8 +34,22 @@ export function normalizeOwner(value) {
   if (raw === "gil") return "GIL";
   if (raw === "sales") return "SALES";
   if (raw === "guilherme" || raw === "guilherme m" || raw === "gm") return "GUILHERME";
+  if (raw === "operador" || raw === "operator") return "OPERADOR";
   if (raw === "admin") return "admin";
   return "BASE";
+}
+
+function profileFromEmail(user) {
+  const email = String(user?.email || "").toLowerCase();
+  const username = email.split("@")[0] || "";
+  const role = normalizeOwner(username);
+  return {
+    id: user?.id || "",
+    username,
+    role: role === "BASE" ? "BASE" : role,
+    full_name: username,
+    active: true
+  };
 }
 
 export function ownerFromRecord(record = {}) {
@@ -93,7 +107,7 @@ export async function getSupabaseSession() {
   const { data, error } = await supabase.auth.getSession();
   if (error || !data.session) return { session: data?.session || null, profile: null, error: error?.message || "" };
   const { data: profile } = await supabase.from("profiles").select("*").eq("id", data.session.user.id).maybeSingle();
-  return { session: data.session, profile: profile || null, error: "" };
+  return { session: data.session, profile: profile || profileFromEmail(data.session.user), error: "" };
 }
 
 export async function signInSupabase(login, password) {
@@ -106,6 +120,28 @@ export async function signInSupabase(login, password) {
 export async function signOutSupabase() {
   if (!supabase) return;
   await supabase.auth.signOut();
+}
+
+export async function loadProfiles() {
+  if (!supabase) throw new Error("Supabase nao configurado.");
+  const { data, error } = await supabase.from("profiles").select("*").order("username", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function saveProfile(profile) {
+  if (!supabase) throw new Error("Supabase nao configurado.");
+  const row = {
+    id: profile.id,
+    username: profile.username,
+    role: profile.role,
+    full_name: profile.full_name || profile.username,
+    active: profile.active !== false,
+    updated_at: new Date().toISOString()
+  };
+  const { data, error } = await supabase.from("profiles").upsert(row, { onConflict: "id" }).select("*").single();
+  if (error) throw error;
+  return data;
 }
 
 function rowToRecord(row) {

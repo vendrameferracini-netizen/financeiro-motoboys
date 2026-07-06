@@ -14,7 +14,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   username text unique not null,
   role text not null default 'BASE'
-    check (role in ('admin', 'GIL', 'SALES', 'GUILHERME', 'BASE')),
+    check (role in ('admin', 'GIL', 'SALES', 'GUILHERME', 'OPERADOR', 'BASE')),
   full_name text,
   active boolean not null default true,
   created_at timestamptz not null default now(),
@@ -261,6 +261,8 @@ begin
     return 'SALES';
   elsif v in ('gm', 'g m', 'guilherme', 'guilhermem', 'guilhermemendes', 'guilhermem.') then
     return 'GUILHERME';
+  elsif v in ('operador', 'operator') then
+    return 'OPERADOR';
   elsif v in ('base', 'empresa', 'operacao', 'operação') then
     return 'BASE';
   end if;
@@ -395,6 +397,7 @@ as $$
       when lower(coalesce(auth.jwt() ->> 'email', '')) = 'gil@financeiro.local' then 'GIL'
       when lower(coalesce(auth.jwt() ->> 'email', '')) = 'sales@financeiro.local' then 'SALES'
       when lower(coalesce(auth.jwt() ->> 'email', '')) = 'guilherme@financeiro.local' then 'GUILHERME'
+      when lower(coalesce(auth.jwt() ->> 'email', '')) = 'operador@financeiro.local' then 'OPERADOR'
       else null
     end,
     'anon'
@@ -638,6 +641,7 @@ begin
     when user_name = 'gil' then 'GIL'
     when user_name = 'sales' then 'SALES'
     when user_name in ('guilherme', 'gm') then 'GUILHERME'
+    when user_name = 'operador' then 'OPERADOR'
     else 'BASE'
   end;
 
@@ -748,11 +752,12 @@ select
     when lower(split_part(u.email, '@', 1)) = 'gil' then 'GIL'
     when lower(split_part(u.email, '@', 1)) = 'sales' then 'SALES'
     when lower(split_part(u.email, '@', 1)) in ('guilherme', 'gm') then 'GUILHERME'
+    when lower(split_part(u.email, '@', 1)) = 'operador' then 'OPERADOR'
     else 'BASE'
   end as role,
   lower(split_part(u.email, '@', 1)) as full_name
 from auth.users u
-where lower(split_part(u.email, '@', 1)) in ('admin', 'gil', 'sales', 'guilherme', 'gm')
+where lower(split_part(u.email, '@', 1)) in ('admin', 'gil', 'sales', 'guilherme', 'gm', 'operador')
 on conflict (id) do update
   set username = excluded.username,
       role = excluded.role,
@@ -821,8 +826,14 @@ drop policy if exists daily_admin_all on public.daily_launches;
 drop policy if exists daily_insert_owner on public.daily_launches;
 drop policy if exists daily_update_owner on public.daily_launches;
 drop policy if exists daily_delete_owner on public.daily_launches;
+drop policy if exists daily_insert_operator on public.daily_launches;
+drop policy if exists daily_update_operator_today on public.daily_launches;
+drop policy if exists daily_delete_operator_today on public.daily_launches;
 create policy daily_select_all on public.daily_launches for select to authenticated using (true);
 create policy daily_admin_all on public.daily_launches for all to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy daily_insert_operator on public.daily_launches for insert to authenticated with check (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
+create policy daily_update_operator_today on public.daily_launches for update to authenticated using (public.current_profile_role() = 'OPERADOR' and launch_date = current_date) with check (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
+create policy daily_delete_operator_today on public.daily_launches for delete to authenticated using (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
 
 drop policy if exists package_select_all on public.package_entries;
 drop policy if exists package_insert_owner on public.package_entries;

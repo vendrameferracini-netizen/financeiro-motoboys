@@ -5,6 +5,8 @@ import {
   getSupabaseSession,
   signInSupabase,
   signOutSupabase,
+  loadProfiles,
+  saveProfile,
   loadCloudState,
   saveCloudRecord,
   deleteCloudRecord,
@@ -24,6 +26,14 @@ const MIGRATION_MARK_KEY = `${STORE_KEY}.migrationStatus`;
 const PARTNERS = ["GIL", "SALES", "GUILHERME"];
 const RESPONSIBLES = [...PARTNERS, "BASE"];
 const PARTNER_SHEETS = { GIL: "GIL", SALES: "SALES", GUILHERME: "GUILHERME M" };
+const PERMISSION_MESSAGE = "Você não possui permissão para realizar esta ação.";
+const VIEWS_BY_ROLE = {
+  admin: ["dashboard", "motoboys", "freelancers", "socios", "base", "lancamentos", "descontos", "descontos-base", "despesas", "fechamentos", "recibos", "relatorios", "backup", "configuracoes", "usuarios"],
+  GIL: ["dashboard", "motoboys", "socios", "base", "descontos", "despesas", "fechamentos", "recibos", "relatorios"],
+  SALES: ["dashboard", "motoboys", "socios", "base", "descontos", "despesas", "fechamentos", "recibos", "relatorios"],
+  GUILHERME: ["dashboard", "motoboys", "socios", "base", "descontos", "despesas", "fechamentos", "recibos", "relatorios"],
+  OPERADOR: ["lancamentos"]
+};
 const CLEAN_OPERATIONAL_MODE = true;
 const CLEAN_OPERATIONAL_VERSION = "real-use-v1";
 const BASE_RATE_ML = 8;
@@ -36,6 +46,7 @@ let imported = { riders: [], daily: [], baseEntries: [], discounts: [], payments
 let editingRiderId = "";
 let editingDiscountId = "";
 let editingExpenseId = "";
+let editingDailyId = "";
 let selectedRider = "";
 let selectedPartner = "GIL";
 let supabaseSession = null;
@@ -43,6 +54,7 @@ let supabaseProfile = null;
 let supabaseOnline = false;
 let lastSupabaseSync = "";
 let localStateForMigration = null;
+let profiles = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -100,6 +112,7 @@ function showSupabaseError(error) {
 }
 
 async function persistRecord(bucket, record) {
+  if (!requireWrite(bucket, record)) return record;
   if (!supabaseOnline) {
     showSupabaseError(new Error("Sem conexão com Supabase. Não foi possível salvar."));
     return record;
@@ -118,6 +131,7 @@ async function persistRecord(bucket, record) {
 }
 
 async function removeCloudRecord(bucket, record) {
+  if (!requireWrite(bucket, record)) return;
   if (!supabaseOnline) {
     showSupabaseError(new Error("Sem conexão com Supabase. Não foi possível salvar."));
     return;
@@ -212,6 +226,50 @@ function normalize(text) { return String(text || "").trim().toLowerCase().normal
 function riderDisplayName(row = {}) { return String(row.name || row.nome || row.rider || row.motoboy || row.motoboyName || "").trim(); }
 function compareRiderName(a, b) { return riderDisplayName(a).localeCompare(riderDisplayName(b), "pt-BR", { sensitivity: "base" }); }
 function sortByRiderName(rows = []) { return [...rows].sort(compareRiderName); }
+function appRole() {
+  if (!isSupabaseConfigured) return "admin";
+  if (!supabaseSession) return "anon";
+  const role = String(supabaseProfile?.role || "").trim();
+  if (role === "admin") return "admin";
+  const normalized = normalizeResponsible(role);
+  if (normalized === "BASE" && normalize(role).includes("operador")) return "OPERADOR";
+  return normalized;
+}
+function isAdminRole() { return appRole() === "admin"; }
+function isOperatorRole() { return appRole() === "OPERADOR"; }
+function isPartnerRole() { return PARTNERS.includes(appRole()); }
+function permittedViews() { return VIEWS_BY_ROLE[appRole()] || []; }
+function canView(view) { return permittedViews().includes(view); }
+function permissionDenied() {
+  window.alert(PERMISSION_MESSAGE);
+  ["backupFeedback", "riderFeedback", "userFeedback", "supabaseFeedback"].forEach((id) => {
+    const el = $(id);
+    if (el) {
+      el.textContent = PERMISSION_MESSAGE;
+      el.className = "feedback error";
+    }
+  });
+  return false;
+}
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+function ownsResponsible(value) {
+  if (isAdminRole()) return true;
+  if (!isPartnerRole()) return false;
+  return normalizeResponsible(value) === appRole();
+}
+function canWriteRecord(bucket, record = {}) {
+  if (isAdminRole()) return true;
+  if (isOperatorRole()) return bucket === "daily" && (!record.date || record.date === todayKey());
+  if (!isPartnerRole()) return false;
+  if (bucket === "baseEntries") return ownsResponsible(record.partner || record.responsible);
+  if (bucket === "discounts") return ownsResponsible(record.partner || record.responsible) && normalizeResponsible(record.partner || record.responsible) !== "BASE";
+  if (bucket === "expenses") return ownsResponsible(record.responsible);
+  if (bucket === "payments" || bucket === "receipts") return ownsResponsible(record.partner || record.responsible);
+  return false;
+}
+function requireWrite(bucket, record = {}) {
+  return canWriteRecord(bucket, record) || permissionDenied();
+}
 function managerAlias(text) {
   const key = normalize(text).replace(/[^a-z0-9]+/g, " ").trim();
   if (!key) return "";
@@ -843,6 +901,7 @@ function normalizeResponsible(value) {
   if (raw === "gm" || raw === "guilherme" || raw === "guilherme m") return "GUILHERME";
   if (raw === "gil") return "GIL";
   if (raw === "sales") return "SALES";
+  if (raw === "operador" || raw === "operator") return "OPERADOR";
   return "BASE";
 }
 
@@ -1165,7 +1224,7 @@ function workTypeSummaryCards() {
 function sum(list, key) { return list.reduce((s, x) => s + Number(x[key] || 0), 0); }
 
 function renderAll() {
-  renderOptions(); renderDashboardV2(); renderMotoboys(); renderFreelancers(); renderPartners(); renderBase(); renderDaily(); renderDiscounts(); renderExpenses(); renderClosings(); renderReceipts(); renderReports(); renderBackup(); renderConfig();
+  renderOptions(); renderDashboardV2(); renderMotoboys(); renderFreelancers(); renderPartners(); renderBase(); renderDaily(); renderDiscounts(); renderExpenses(); renderClosings(); renderReceipts(); renderReports(); renderBackup(); renderConfig(); renderUsers(); applyPermissions();
 }
 
 function renderOptions() {
@@ -1389,7 +1448,7 @@ function renderBase() {
   $("baseClosingRows").innerHTML = baseClosingRecords().map((x) => `<tr><td>${x.partner}</td><td>${x.period}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.valueMl)}</td><td>${money(x.valueShopee)}</td><td>${money(x.totalPay)}</td><td>${money(x.managerDiscounts)}</td><td>${money(x.variablePeriodCosts)}</td><td>${money(x.variableDiscounts)}</td><td>${money(x.netAfterVariable)}</td><td>${x.status}</td></tr>`).join("");
 }
 
-function renderDaily() { updateDailyGross(); $("dailyRows").innerHTML = allDaily().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider)}</td><td>${workTypeBadge(dailyTypeFor(x))}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.avulso)}</td><td>${money(x.gross)}</td><td>${x.source === "manual" ? `<button data-remove-daily="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join(""); }
+function renderDaily() { updateDailyGross(); $("dailyRows").innerHTML = allDaily().map((x) => { const actions = x.source === "manual" && canWriteRecord("daily", x) ? `<button data-edit-daily="${escapeHtml(x.id)}">Editar</button> <button data-remove-daily="${escapeHtml(x.id)}">Remover</button>` : ""; return `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider)}</td><td>${workTypeBadge(dailyTypeFor(x))}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.avulso)}</td><td>${money(x.gross)}</td><td>${actions}</td></tr>`; }).join(""); }
 function renderDiscounts() {
   $("discountRows").innerHTML = allDiscounts().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.partner || "BASE")}</td><td>${escapeHtml(x.rider)}</td><td>${escapeHtml(x.type)}</td><td>${money(x.value)}</td><td>${escapeHtml(x.observation || x.reason || x.note || "")}</td><td>${escapeHtml(x.sheetOriginal || "")}</td><td>${escapeHtml(x.lineOriginal || "")}</td><td>${escapeHtml(x.columnOriginal || "")}</td><td>${x.source === "manual" ? `<button data-edit-discount="${escapeHtml(x.id)}">Editar</button> <button data-remove-discount="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
   if ($("baseDiscountRows")) $("baseDiscountRows").innerHTML = allDiscounts().filter((x) => (x.partner || "BASE") === "BASE").map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider || "")}</td><td>${escapeHtml(x.type)}</td><td>${money(x.value)}</td><td>${escapeHtml(x.reason || "")}</td><td>${escapeHtml(x.observation || x.note || "")}</td><td>${x.source === "manual" ? `<button data-edit-discount="${escapeHtml(x.id)}">Editar</button> <button data-remove-discount="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
@@ -1518,6 +1577,132 @@ function renderConfig() {
   $("configShopee").value = money(state.config.shopee);
   $("configAvulso").value = money(state.config.avulso);
   renderSupabaseStatus();
+}
+
+function setOptions(selectId, values) {
+  const select = $(selectId);
+  if (!select) return;
+  select.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
+}
+
+function applyRoleDefaults() {
+  const role = appRole();
+  const partnerLocked = PARTNERS.includes(role);
+  if (partnerLocked) {
+    ["basePartner", "discountPartner", "expenseResponsible", "paymentPartner"].forEach((id) => {
+      const select = $(id);
+      if (!select) return;
+      setOptions(id, [role]);
+      select.value = role;
+      select.disabled = true;
+    });
+  } else if (isOperatorRole()) {
+    ["basePartner", "discountPartner", "expenseResponsible", "paymentPartner"].forEach((id) => {
+      const select = $(id);
+      if (select) select.disabled = true;
+    });
+  } else {
+    const partnerOptions = ["GIL", "SALES", "GUILHERME"];
+    setOptions("basePartner", partnerOptions);
+    setOptions("paymentPartner", partnerOptions);
+    setOptions("discountPartner", [...partnerOptions, "BASE"]);
+    setOptions("expenseResponsible", [...partnerOptions, "BASE"]);
+    ["basePartner", "discountPartner", "expenseResponsible", "paymentPartner"].forEach((id) => { if ($(id)) $(id).disabled = false; });
+  }
+}
+
+function setFormDisabled(formId, disabled) {
+  const form = $(formId);
+  if (!form) return;
+  form.querySelectorAll("input, select, textarea, button").forEach((el) => {
+    if (el.id === "sidebarLogout") return;
+    el.disabled = Boolean(disabled);
+  });
+}
+
+function applyPermissions() {
+  const allowed = new Set(permittedViews());
+  document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
+    button.hidden = !allowed.has(button.dataset.view);
+  });
+  if ($("sidebarLogout")) $("sidebarLogout").hidden = false;
+  if (isSupabaseConfigured && !supabaseSession) return;
+  document.querySelectorAll(".view").forEach((view) => {
+    if (allowed.has(view.id)) return;
+    view.classList.remove("active");
+  });
+  const active = document.querySelector(".view.active")?.id;
+  if (!active || !allowed.has(active)) switchView(isOperatorRole() ? "lancamentos" : [...allowed][0] || "dashboard");
+  if (document.querySelector(".top-actions")) document.querySelector(".top-actions").hidden = isOperatorRole();
+  setFormDisabled("riderForm", !isAdminRole());
+  setFormDisabled("baseForm", isOperatorRole());
+  setFormDisabled("discountForm", isOperatorRole());
+  setFormDisabled("expenseForm", isOperatorRole());
+  const adminOnly = ["exportBackup", "importBackup", "backupMigrateLocal", "clearOperationalBackup", "saveConfig", "clearOperational", "saveUserProfile", "newUserProfile"];
+  adminOnly.forEach((id) => { if ($(id)) $(id).disabled = !isAdminRole(); });
+  applyRoleDefaults();
+}
+
+function showUserFeedback(message, type = "ok") {
+  const el = $("userFeedback");
+  if (!el) return;
+  el.textContent = message;
+  el.className = `feedback ${type}`;
+}
+
+function clearUserForm() {
+  ["profileId", "profileAuthId", "profileUsername", "profileFullName"].forEach((id) => { if ($(id)) $(id).value = ""; });
+  if ($("profileRole")) $("profileRole").value = "OPERADOR";
+  if ($("profileActive")) $("profileActive").value = "true";
+}
+
+async function refreshProfiles() {
+  if (!isAdminRole() || !supabaseOnline) {
+    profiles = [];
+    renderUsers();
+    return;
+  }
+  try {
+    profiles = await loadProfiles();
+    renderUsers();
+  } catch (error) {
+    showUserFeedback(error.message || "Erro ao carregar usuarios.", "error");
+  }
+}
+
+function renderUsers() {
+  if (!$("usersList")) return;
+  if (!isAdminRole()) {
+    $("usersList").innerHTML = `<div class="empty">${PERMISSION_MESSAGE}</div>`;
+    return;
+  }
+  $("usersList").innerHTML = `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Perfil</th><th>Nome</th><th>Status</th><th>Acoes</th></tr></thead><tbody>${(profiles || []).map((profile) => `<tr><td>${escapeHtml(profile.username || "")}</td><td>${escapeHtml(profile.role || "")}</td><td>${escapeHtml(profile.full_name || "")}</td><td>${profile.active === false ? "inativo" : "ativo"}</td><td><button data-edit-profile="${escapeHtml(profile.id)}">Editar</button></td></tr>`).join("") || `<tr><td colspan="5" class="empty">Sem perfis cadastrados.</td></tr>`}</tbody></table></div>`;
+}
+
+async function saveUserProfile() {
+  if (!isAdminRole()) return permissionDenied();
+  const id = $("profileAuthId")?.value.trim() || $("profileId")?.value.trim();
+  const username = $("profileUsername")?.value.trim().toLowerCase();
+  if (!id || !username) {
+    showUserFeedback("Informe o ID do Auth e o usuario.", "error");
+    return false;
+  }
+  try {
+    await saveProfile({
+      id,
+      username,
+      role: $("profileRole").value,
+      full_name: $("profileFullName").value.trim() || username,
+      active: $("profileActive").value === "true"
+    });
+    showUserFeedback("Perfil salvo com sucesso.", "ok");
+    clearUserForm();
+    await refreshProfiles();
+    return true;
+  } catch (error) {
+    showUserFeedback(error.message || "Erro ao salvar perfil.", "error");
+    return false;
+  }
 }
 
 function backupPayload() {
@@ -1933,6 +2118,7 @@ function downloadJson(filename, data) {
 }
 
 function exportBackupData() {
+  if (!isAdminRole()) return permissionDenied();
   state.lastBackupAt = new Date().toISOString();
   saveState("Backup exportado", "JSON completo dos dados do sistema.");
   const payload = backupPayload();
@@ -1943,6 +2129,7 @@ function exportBackupData() {
 }
 
 function importBackupText(text) {
+  if (!isAdminRole()) return permissionDenied();
   const parsed = JSON.parse(text);
   const nextState = normalizeStateData(parsed.state || parsed);
   if (!Array.isArray(nextState.riders)) throw new Error("Arquivo de backup invalido.");
@@ -1958,6 +2145,7 @@ function importBackupText(text) {
 }
 
 function clearOperationalData(origin = "Backup") {
+  if (!isAdminRole()) return permissionDenied();
   if (!window.confirm("Limpar dados operacionais? Cadastros, valores dos motoboys e configuracoes serao preservados.")) return;
   resetOperationalBuckets();
   state.cleanOperational = true;
@@ -2113,6 +2301,7 @@ function logRiderChange(action, previous, next) {
   saveState(`Motoboy ${action}`, (next || previous)?.name || "", { module: "motoboys", action, previous, next });
 }
 function saveRiderFromForm() {
+  if (!isAdminRole()) return permissionDenied();
   const form = collectRiderForm();
   const error = validateRider(form);
   if (error) {
@@ -2151,6 +2340,7 @@ function saveRiderFromForm() {
   return true;
 }
 function toggleSelectedRiderStatus() {
+  if (!isAdminRole()) return permissionDenied();
   const r = riderById($("riderId").value) || riderByName(selectedRider);
   if (!r) {
     showRiderFeedback("Selecione um motoboy para ativar ou inativar.", "error");
@@ -2167,6 +2357,7 @@ function toggleSelectedRiderStatus() {
   return true;
 }
 function removeSelectedRider() {
+  if (!isAdminRole()) return permissionDenied();
   const r = riderById($("riderId").value) || riderByName(selectedRider);
   if (!r) {
     showRiderFeedback("Selecione um motoboy para remover.", "error");
@@ -2268,6 +2459,12 @@ function closeMobileMenu() {
 }
 
 function switchView(id) {
+  if (!canView(id)) {
+    permissionDenied();
+    const fallback = isOperatorRole() ? "lancamentos" : permittedViews()[0];
+    if (!fallback) return;
+    id = fallback;
+  }
   document.querySelectorAll(".nav-item, .view").forEach((el) => el.classList.remove("active"));
   const nav = document.querySelector(`.nav-item[data-view="${id}"]`);
   nav?.classList.add("active");
@@ -2309,6 +2506,8 @@ async function syncFromSupabase() {
     lastSupabaseSync = new Date().toISOString();
     showAuthGate(false);
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    if (isAdminRole()) await refreshProfiles();
+    if (isOperatorRole()) switchView("lancamentos");
     return true;
   } catch (error) {
     supabaseOnline = false;
@@ -2320,6 +2519,7 @@ async function syncFromSupabase() {
 }
 
 async function migrateLocalToSupabase() {
+  if (!isAdminRole()) return permissionDenied();
   if (!supabaseOnline) {
     const message = "Sem conexao com Supabase. Nao foi possivel salvar.";
     showSupabaseError(new Error(message));
@@ -2491,6 +2691,32 @@ function bindEvents() {
   $("newRider").addEventListener("click", clearRiderForm);
   $("toggleRider").addEventListener("click", toggleSelectedRiderStatus);
   $("removeRider").addEventListener("click", removeSelectedRider);
+  const guardSubmit = (formId, bucket, rowFn) => {
+    $(formId)?.addEventListener("submit", (event) => {
+      const row = rowFn();
+      if (requireWrite(bucket, row)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  };
+  guardSubmit("baseForm", "baseEntries", () => ({ partner: $("basePartner")?.value || "", responsible: $("basePartner")?.value || "" }));
+  guardSubmit("dailyForm", "daily", () => ({ date: $("dailyDate")?.value || todayKey() }));
+  guardSubmit("discountForm", "discounts", () => ({ partner: $("discountPartner")?.value || "" }));
+  guardSubmit("expenseForm", "expenses", () => ({ responsible: $("expenseResponsible")?.value || "" }));
+  $("dailyForm")?.addEventListener("submit", (event) => {
+    if (!editingDailyId) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const row = { id: editingDailyId, source: "manual", date: $("dailyDate").value, rider: $("dailyRider").value, dailyType: $("dailyType").value, ml: Number($("dailyMl").value || 0), shopee: Number($("dailyShopee").value || 0), avulso: Number($("dailyAvulso").value || 0), rateMl: parseMoney($("dailyRateMl").value), rateShopee: parseMoney($("dailyRateShopee").value), rateAvulso: parseMoney($("dailyRateAvulso").value), gross: parseMoney($("dailyGross").value), responsible: $("dailyResponsible").value.trim(), note: $("dailyNote").value.trim() };
+    if (!requireWrite("daily", row)) return;
+    const index = state.daily.findIndex((x) => x.id === editingDailyId);
+    if (index >= 0) state.daily[index] = row;
+    else state.daily.unshift(row);
+    editingDailyId = "";
+    persistRecord("daily", row);
+    saveState("Lançamento diário editado", `${row.rider} - ${workTypeLabel(row.dailyType)}`);
+    renderAll();
+  }, true);
   $("baseForm").addEventListener("submit", (e) => { e.preventDefault(); const row = baseEntryCalc({ id: uid("base"), source: "manual", date: $("baseDate").value, partner: $("basePartner").value, ml: Number($("baseMl").value || 0), shopee: Number($("baseShopee").value || 0), note: $("baseNote").value.trim(), responsible: $("baseResponsible").value.trim() }); if (!confirmDuplicate(state.baseEntries, row)) return; state.baseEntries.unshift(row); persistRecord("baseEntries", row); saveState("Entrada de base", row.partner); renderAll(); });
   $("dailyForm").addEventListener("submit", (e) => { e.preventDefault(); const row = { id: uid("daily"), source: "manual", date: $("dailyDate").value, rider: $("dailyRider").value, dailyType: $("dailyType").value, ml: Number($("dailyMl").value || 0), shopee: Number($("dailyShopee").value || 0), avulso: Number($("dailyAvulso").value || 0), rateMl: parseMoney($("dailyRateMl").value), rateShopee: parseMoney($("dailyRateShopee").value), rateAvulso: parseMoney($("dailyRateAvulso").value), gross: parseMoney($("dailyGross").value), responsible: $("dailyResponsible").value.trim(), note: $("dailyNote").value.trim() }; if (!confirmDuplicate(state.daily, row)) return; state.daily.unshift(row); persistRecord("daily", row); saveState("Lançamento diário", `${row.rider} - ${workTypeLabel(row.dailyType)}`); renderAll(); });
   $("discountForm").addEventListener("submit", (e) => { e.preventDefault(); e.stopImmediatePropagation(); const id = editingDiscountId || uid("disc"); const row = { id, source: "manual", date: $("discountDate").value, partner: $("discountPartner").value, rider: $("discountRider").value, closingRider: $("discountRider").value, riderMatched: true, type: $("discountType").value, value: parseMoney($("discountValue").value), code: $("discountCode").value.trim(), reason: $("discountReason").value.trim(), note: $("discountNote").value.trim(), observation: $("discountNote").value.trim() || $("discountReason").value.trim(), sheetOriginal: "LANCAMENTO MANUAL", lineOriginal: "", columnOriginal: "", origin: "LANCAMENTO MANUAL" }; row.importKey = uniqueKey([row.partner, row.rider, row.type, moneyKey(row.value), row.observation, row.id]); if (!confirmDuplicate(state.discounts, row, editingDiscountId)) return; const idx = state.discounts.findIndex((x) => x.id === id); if (idx >= 0) state.discounts[idx] = row; else state.discounts.unshift(row); editingDiscountId = ""; persistRecord("discounts", row); saveState("Desconto", `${row.partner} -> ${row.rider}`); renderAll(); }, true);
@@ -2518,6 +2744,57 @@ function bindEvents() {
     if (!btn) return;
     switchView("recibos");
     renderReceipts(btn.dataset.freelancerReceipt);
+  });
+  $("baseRows")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-remove-base]");
+    if (!btn) return;
+    const row = state.baseEntries.find((x) => x.id === btn.dataset.removeBase);
+    if (!requireWrite("baseEntries", row || {})) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+  $("dailyRows")?.addEventListener("click", (e) => {
+    const edit = e.target.closest("button[data-edit-daily]");
+    const remove = e.target.closest("button[data-remove-daily]");
+    const id = edit?.dataset.editDaily || remove?.dataset.removeDaily;
+    if (!id) return;
+    const row = state.daily.find((x) => x.id === id);
+    if (!requireWrite("daily", row || {})) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+  const guardDiscountClick = (e) => {
+    const edit = e.target.closest("button[data-edit-discount]");
+    const remove = e.target.closest("button[data-remove-discount]");
+    const id = edit?.dataset.editDiscount || remove?.dataset.removeDiscount;
+    if (!id) return;
+    const row = state.discounts.find((x) => x.id === id);
+    if (!requireWrite("discounts", row || {})) { e.preventDefault(); e.stopImmediatePropagation(); }
+  };
+  $("discountRows")?.addEventListener("click", guardDiscountClick, true);
+  $("baseDiscountRows")?.addEventListener("click", guardDiscountClick, true);
+  $("expenseRows")?.addEventListener("click", (e) => {
+    const edit = e.target.closest("button[data-edit-expense]");
+    const remove = e.target.closest("button[data-remove-expense]");
+    const id = edit?.dataset.editExpense || remove?.dataset.removeExpense;
+    if (!id) return;
+    const row = state.expenses.find((x) => x.id === id);
+    if (!requireWrite("expenses", row || {})) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
+  $("dailyRows")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-edit-daily]");
+    if (!btn) return;
+    const row = state.daily.find((x) => x.id === btn.dataset.editDaily);
+    if (!row) return;
+    editingDailyId = row.id;
+    $("dailyDate").value = row.date || todayKey();
+    $("dailyRider").value = row.rider || "";
+    setDailyType(dailyTypeFor(row), false);
+    $("dailyMl").value = row.ml || 0;
+    $("dailyShopee").value = row.shopee || 0;
+    $("dailyAvulso").value = row.avulso || 0;
+    $("dailyRateMl").value = money(row.rateMl);
+    $("dailyRateShopee").value = money(row.rateShopee);
+    $("dailyRateAvulso").value = money(row.rateAvulso);
+    $("dailyResponsible").value = row.responsible || "";
+    $("dailyNote").value = row.note || "";
+    updateDailyGross();
   });
   $("baseRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-base]"); if (!btn) return; const row = state.baseEntries.find((x) => x.id === btn.dataset.removeBase); if (!row || !window.confirm("Remover esta entrada de base?")) return; state.baseEntries = state.baseEntries.filter((x) => x.id !== row.id); removeCloudRecord("baseEntries", row); saveState("Entrada de base removida", row.partner); renderAll(); });
   $("dailyRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-daily]"); if (!btn) return; const row = state.daily.find((x) => x.id === btn.dataset.removeDaily); if (!row || !window.confirm("Remover este lançamento diário?")) return; state.daily = state.daily.filter((x) => x.id !== row.id); removeCloudRecord("daily", row); saveState("Lançamento diário removido", row.rider); renderAll(); });
@@ -2615,13 +2892,23 @@ function bindEvents() {
   $("closingType").addEventListener("change", renderClosings); $("closingRider").addEventListener("change", renderClosings);
   $("closingRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-receipt]"); if (btn) { switchView("recibos"); renderReceipts(btn.dataset.receipt); } });
   $("receiptRider").addEventListener("change", () => renderReceipts()); $("receiptClosing").addEventListener("change", () => renderReceipts());
+  $("markPaid")?.addEventListener("click", (e) => { if (requireWrite("payments", { partner: $("paymentPartner")?.value || "" })) return; e.preventDefault(); e.stopImmediatePropagation(); }, true);
   $("markPaid").addEventListener("click", () => { const c = closingRecords().find((x) => x.id === $("receiptClosing").value); if (!c) return; const partner = $("paymentPartner").value; const date = $("paymentDate").value || new Date().toISOString().slice(0, 10); const value = parseMoney($("paymentValue").value) || c.net; const note = $("paymentNote").value.trim(); state.paid[c.id] = { date, net: value, partner, note }; const payment = { id: uid("pay"), closingId: c.id, rider: c.rider, partner, date, value, note }; state.payments.unshift(payment); persistRecord("payments", payment); const receipt = { id: uid("receipt"), closingId: c.id, rider: c.rider, partner, date, value, note, html: receiptHtml(c) }; state.receipts.unshift(receipt); persistRecord("receipts", receipt); const disc = { id: uid("pay-vale"), source: "manual", date, partner, rider: c.rider, closingRider: c.rider, riderMatched: true, type: "Vale", value, code: "", reason: "Pagamento de motoboy", note, observation: note || "Vale/adiantamento gerado pelo pagamento", sheetOriginal: "PAGAMENTO", lineOriginal: "", columnOriginal: "", origin: "PAGAMENTO" }; disc.importKey = uniqueKey([disc.partner, disc.rider, disc.type, moneyKey(disc.value), disc.observation, disc.id]); state.discounts.unshift(disc); persistRecord("discounts", disc); saveState("Fechamento pago", `${c.rider} por ${partner}`); renderAll(); });
   $("printReceipt").addEventListener("click", () => window.print());
+  ["saveConfig", "clearOperational", "exportBackup", "importBackup", "backupMigrateLocal", "clearOperationalBackup"].forEach((id) => {
+    $(id)?.addEventListener("click", (e) => {
+      if (isAdminRole()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      permissionDenied();
+    }, true);
+  });
   $("saveConfig").addEventListener("click", () => { state.config = { ml: parseMoney($("configMl").value), shopee: parseMoney($("configShopee").value), avulso: parseMoney($("configAvulso").value) }; saveState("Configuração", "Valores padrão"); renderAll(); });
   $("syncSupabase")?.addEventListener("click", async () => { await syncFromSupabase(); renderAll(); });
   $("migrateLocalToSupabase")?.addEventListener("click", migrateLocalToSupabase);
   $("dashboardLocalStorageDiagnostic")?.addEventListener("click", () => renderLocalStorageDiagnostics("dashboardLocalStorageReport"));
   $("logoutSupabase")?.addEventListener("click", async () => { await signOutSupabase(); supabaseOnline = false; supabaseSession = null; supabaseProfile = null; showAuthGate(isSupabaseConfigured, "Sessao encerrada."); renderSupabaseStatus(); });
+  $("sidebarLogout")?.addEventListener("click", async () => { await signOutSupabase(); supabaseOnline = false; supabaseSession = null; supabaseProfile = null; showAuthGate(isSupabaseConfigured, "Sessao encerrada."); renderSupabaseStatus(); applyPermissions(); });
   $("clearOperational")?.addEventListener("click", () => {
     if (!window.confirm("Limpar lançamentos operacionais? Cadastros de motoboys, valores e regras serão preservados.")) return;
     resetOperationalBuckets();
@@ -2635,6 +2922,7 @@ function bindEvents() {
   $("importBackup")?.addEventListener("click", () => $("backupFile")?.click());
   $("backupMigrateLocal")?.addEventListener("click", migrateLocalToSupabase);
   $("backupFile")?.addEventListener("change", (e) => {
+    if (!isAdminRole()) { permissionDenied(); e.target.value = ""; return; }
     const file = e.target.files?.[0];
     if (!file) return;
     if (!window.confirm("Importar este backup e substituir os dados atuais do sistema?")) {
@@ -2652,6 +2940,21 @@ function bindEvents() {
       }
     };
     reader.readAsText(file);
+  });
+  $("newUserProfile")?.addEventListener("click", clearUserForm);
+  $("saveUserProfile")?.addEventListener("click", saveUserProfile);
+  $("usersList")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-edit-profile]");
+    if (!btn) return;
+    if (!isAdminRole()) return permissionDenied();
+    const profile = profiles.find((x) => x.id === btn.dataset.editProfile);
+    if (!profile) return;
+    $("profileId").value = profile.id;
+    $("profileAuthId").value = profile.id;
+    $("profileUsername").value = profile.username || "";
+    $("profileRole").value = profile.role || "OPERADOR";
+    $("profileFullName").value = profile.full_name || "";
+    $("profileActive").value = profile.active === false ? "false" : "true";
   });
   $("exportExcel").addEventListener("click", exportExcel); $("printPage").addEventListener("click", () => window.print());
 }

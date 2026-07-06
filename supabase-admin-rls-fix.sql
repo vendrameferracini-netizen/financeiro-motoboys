@@ -24,6 +24,7 @@ as $$
       when lower(coalesce(auth.jwt() ->> 'email', '')) = 'gil@financeiro.local' then 'GIL'
       when lower(coalesce(auth.jwt() ->> 'email', '')) = 'sales@financeiro.local' then 'SALES'
       when lower(coalesce(auth.jwt() ->> 'email', '')) = 'guilherme@financeiro.local' then 'GUILHERME'
+      when lower(coalesce(auth.jwt() ->> 'email', '')) = 'operador@financeiro.local' then 'OPERADOR'
       else null
     end,
     'anon'

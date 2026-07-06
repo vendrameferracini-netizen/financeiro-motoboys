@@ -19,7 +19,7 @@
     <form id="loginForm" class="auth-card">
       <h1>Financeiro Motoboys</h1>
       <p>Entre com seu usuario Supabase.</p>
-      <label>Usuario<select id="loginUser"><option value="admin">admin</option><option value="gil">gil</option><option value="sales">sales</option><option value="guilherme">guilherme</option></select></label>
+      <label>Usuario<select id="loginUser"><option value="admin">admin</option><option value="gil">gil</option><option value="sales">sales</option><option value="guilherme">guilherme</option><option value="operador">operador</option></select></label>
       <label>Senha<input id="loginPassword" type="password" autocomplete="current-password" required></label>
       <button class="primary" type="submit">Entrar</button>
       <div id="loginFeedback" class="feedback error" role="status"></div>
@@ -46,6 +46,8 @@
       <button class="nav-item" data-view="relatorios">Relatórios</button>
       <button class="nav-item" data-view="backup">Backup</button>
       <button class="nav-item" data-view="configuracoes">Configurações</button>
+      <button class="nav-item" data-view="usuarios">Usuários</button>
+      <button id="sidebarLogout" class="nav-item" type="button">Sair</button>
     </nav>
   </aside>
 
@@ -249,6 +251,23 @@
 
     <section id="configuracoes" class="view">
       <section class="panel form"><div class="panel-head"><h2>Valores padrão</h2></div><label>Mercado Livre<input id="configMl" type="text" value="R$ 8,00"></label><label>Shopee<input id="configShopee" type="text" value="R$ 5,00"></label><label>Avulso<input id="configAvulso" type="text" value="R$ 0,00"></label><div class="actions"><button id="saveConfig" class="primary" type="button">Salvar configurações</button><button id="clearOperational" type="button">Limpar dados operacionais</button></div></section>
+    </section>
+    <section id="usuarios" class="view">
+      <div class="grid form-grid">
+        <form id="userForm" class="panel form">
+          <div class="panel-head"><h2>Usuários</h2></div>
+          <input id="profileId" type="hidden">
+          <label>ID do Auth<input id="profileAuthId" type="text" placeholder="UUID do usuario no Supabase Auth"></label>
+          <label>Usuario<input id="profileUsername" type="text" placeholder="admin, gil, sales, guilherme ou operador"></label>
+          <label>Perfil<select id="profileRole"><option value="admin">ADMIN</option><option value="GIL">GIL</option><option value="SALES">SALES</option><option value="GUILHERME">GUILHERME</option><option value="OPERADOR">OPERADOR</option></select></label>
+          <label>Nome<input id="profileFullName" type="text"></label>
+          <label>Status<select id="profileActive"><option value="true">ativo</option><option value="false">inativo</option></select></label>
+          <div id="userFeedback" class="feedback" role="status"></div>
+          <div class="actions"><button id="saveUserProfile" class="primary" type="button">Salvar perfil</button><button id="newUserProfile" type="button">Novo</button></div>
+        </form>
+        <section class="panel"><div class="panel-head"><h2>Perfis cadastrados</h2></div><div id="usersList"></div></section>
+      </div>
+      <section class="panel"><div class="panel-head"><h2>Usuario inicial operador</h2></div><p>Crie o usuario <strong>operador@financeiro.local</strong> no Supabase Auth com a senha temporaria <strong>Operador@2026#Temp</strong> e rode o SQL de sincronizacao de perfil gerado no projeto.</p></section>
     </section>
     <footer class="version-stamp">Versão mobile corrigida - 05/07</footer>
   </main>
