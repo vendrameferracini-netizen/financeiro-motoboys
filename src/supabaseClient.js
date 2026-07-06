@@ -136,14 +136,19 @@ export async function getSupabaseSession() {
   if (!supabase) return { session: null, profile: null, error: "Supabase nao configurado." };
   const { data, error } = await supabase.auth.getSession();
   if (error || !data.session) return { session: data?.session || null, profile: null, error: error?.message || "" };
-  const { data: profile } = await supabase.from("profiles").select("*").eq("id", data.session.user.id).maybeSingle();
+  const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", data.session.user.id).maybeSingle();
+  if (profileError) return { session: data.session, profile: profileFromEmail(data.session.user), error: profileError.message || "" };
   return { session: data.session, profile: profile || profileFromEmail(data.session.user), error: "" };
 }
 
 export async function signInSupabase(login, password) {
   if (!supabase) throw new Error("Supabase nao configurado.");
-  const { data, error } = await supabase.auth.signInWithPassword({ email: loginToEmail(login), password });
-  if (error) throw error;
+  const email = loginToEmail(login);
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    error.message = `Falha ao entrar com ${email}: ${error.message}`;
+    throw error;
+  }
   return data;
 }
 
