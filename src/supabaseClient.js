@@ -102,6 +102,36 @@ function splitPeriodKey(key = "") {
   return { start: start || null, end: end || null };
 }
 
+function isoDate(year, month, day) {
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function periodKey(date) {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return { key: "", label: "", start: null, end: null };
+  const year = d.getFullYear();
+  const month = d.getMonth();
+  const firstHalf = d.getDate() <= 15;
+  const start = isoDate(year, month, firstHalf ? 1 : 16);
+  const end = isoDate(year, month, firstHalf ? 15 : new Date(year, month + 1, 0).getDate());
+  const monthLabel = String(month + 1).padStart(2, "0");
+  return { key: `${start}|${end}`, label: `${firstHalf ? "1ª" : "2ª"} quinzena ${monthLabel}/${year}`, start, end };
+}
+
+function variableExpenseDiscountPeriod(date) {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return periodKey(date || new Date().toISOString().slice(0, 10));
+  const year = d.getFullYear();
+  const month = d.getMonth();
+  return d.getDate() <= 15
+    ? periodKey(isoDate(year, month, 16))
+    : periodKey(isoDate(month === 11 ? year + 1 : year, month === 11 ? 0 : month + 1, 1));
+}
+
+function normalizeExpenseType(value) {
+  return String(value || "").trim().toLowerCase().includes("fix") ? "fixa" : "variavel";
+}
+
 export async function getSupabaseSession() {
   if (!supabase) return { session: null, profile: null, error: "Supabase nao configurado." };
   const { data, error } = await supabase.auth.getSession();
@@ -245,9 +275,11 @@ function recordToRow(record, table) {
   }
 
   if (table === "expenses") {
-    const origin = splitPeriodKey(record.originPeriodKey);
-    const discount = splitPeriodKey(record.discountPeriodKey);
-    const type = String(record.type || "variavel").toLowerCase() === "fixa" ? "fixa" : "variavel";
+    const type = normalizeExpenseType(record.type || "variavel");
+    const calculatedOrigin = type === "variavel" ? periodKey(record.date) : { key: "", label: "", start: null, end: null };
+    const calculatedDiscount = type === "variavel" ? variableExpenseDiscountPeriod(record.date) : { key: "", label: "", start: null, end: null };
+    const origin = type === "variavel" ? splitPeriodKey(record.originPeriodKey || calculatedOrigin.key) : { start: null, end: null };
+    const discount = type === "variavel" ? splitPeriodKey(record.discountPeriodKey || calculatedDiscount.key) : { start: null, end: null };
     return {
       ...base,
       expense_date: toDate(record.date),
@@ -257,12 +289,12 @@ function recordToRow(record, table) {
       description: cleanText(record.description || record.category || "Despesa"),
       value: toNumber(record.value),
       observation: cleanText(record.note || record.observation),
-      origin_period_start: origin.start,
-      origin_period_end: origin.end,
-      origin_period_label: cleanText(record.originPeriodLabel),
-      discount_period_start: discount.start,
-      discount_period_end: discount.end,
-      discount_period_label: cleanText(record.discountPeriodLabel),
+      origin_period_start: origin.start || calculatedOrigin.start,
+      origin_period_end: origin.end || calculatedOrigin.end,
+      origin_period_label: cleanText(type === "variavel" ? (record.originPeriodLabel || calculatedOrigin.label) : ""),
+      discount_period_start: discount.start || calculatedDiscount.start,
+      discount_period_end: discount.end || calculatedDiscount.end,
+      discount_period_label: cleanText(type === "variavel" ? (record.discountPeriodLabel || calculatedDiscount.label) : ""),
       status: statusToDb(record.status, "pendente")
     };
   }

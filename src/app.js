@@ -917,6 +917,10 @@ function variableExpenseDiscountPeriod(date) {
   return d.getDate() <= 15 ? periodKey(isoDate(y, m, 16)) : periodKey(isoDate(m === 11 ? y + 1 : y, m === 11 ? 0 : m + 1, 1));
 }
 
+function normalizeExpenseType(value) {
+  return normalize(value).includes("fix") ? "fixa" : "variavel";
+}
+
 function nextQuinzenalPeriod(period) {
   if (!period?.start) return variableExpenseDiscountPeriod(new Date().toISOString().slice(0, 10));
   const d = new Date(`${period.start}T00:00:00`);
@@ -936,14 +940,14 @@ function periodFromKey(key = "", label = "") {
 }
 
 function enrichExpense(row) {
-  const type = row.type || "fixa";
+  const type = normalizeExpenseType(row.type || "fixa");
   const responsible = normalizeResponsible(row.responsible);
   if (type !== "variavel") return { ...row, responsible, originPeriodKey: "", originPeriodLabel: "", discountPeriodKey: "", discountPeriodLabel: "", discountPeriodManual: false };
   const origin = periodKey(row.date, "quinzenal");
   const automaticDiscount = variableExpenseDiscountPeriod(row.date);
   const manualDiscount = row.discountPeriodManual && row.discountPeriodKey ? periodFromKey(row.discountPeriodKey, row.discountPeriodLabel) : null;
   const discount = manualDiscount || automaticDiscount;
-  return { ...row, responsible, originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discount.key, discountPeriodLabel: discount.label, discountPeriodManual: Boolean(manualDiscount && manualDiscount.key !== automaticDiscount.key) };
+  return { ...row, type, responsible, originPeriodKey: origin.key, originPeriodLabel: origin.label, discountPeriodKey: discount.key, discountPeriodLabel: discount.label, discountPeriodManual: Boolean(manualDiscount && manualDiscount.key !== automaticDiscount.key) };
 }
 
 function allExpenses() {
@@ -1456,7 +1460,7 @@ function renderDiscounts() {
 
 function updateExpensePeriodFields(forceCalculated = false) {
   if (!$("expenseOriginPeriod") || !$("expenseDiscountPeriod")) return;
-  const isVariable = $("expenseType").value === "variavel";
+  const isVariable = normalizeExpenseType($("expenseType").value) === "variavel";
   if (!isVariable) {
     $("expenseOriginPeriod").value = "Nao se aplica";
     $("expenseDiscountPeriod").innerHTML = `<option value="">Nao se aplica</option>`;
@@ -2829,7 +2833,7 @@ function bindEvents() {
   $("expenseForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     const id = editingExpenseId || uid("expense");
-    const type = $("expenseType").value;
+    const type = normalizeExpenseType($("expenseType").value);
     if (type === "variavel") {
       const missing = !$("expenseDate").value || !$("expenseResponsible").value || !$("expenseCategory").value.trim() || !$("expenseDescription").value.trim() || !(parseMoney($("expenseValue").value) > 0) || !$("expenseNote").value.trim() || !$("expenseStatus").value;
       if (missing) {
@@ -2863,7 +2867,7 @@ function bindEvents() {
       editingExpenseId = row.id;
       $("expenseId").value = row.id;
       $("expenseDate").value = row.date || "";
-      $("expenseType").value = row.type || "fixa";
+      $("expenseType").value = normalizeExpenseType(row.type || "fixa");
       $("expenseCategory").value = row.category || "";
       $("expenseDescription").value = row.description || "";
       $("expenseValue").value = money(row.value);
