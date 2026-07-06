@@ -12,6 +12,8 @@ drop policy if exists settings_select_authenticated on public.settings;
 drop policy if exists settings_insert_authenticated on public.settings;
 drop policy if exists settings_update_authenticated on public.settings;
 drop policy if exists settings_delete_admin on public.settings;
+drop policy if exists settings_insert_admin on public.settings;
+drop policy if exists settings_update_admin on public.settings;
 
 create policy settings_select_authenticated
 on public.settings
@@ -23,14 +25,14 @@ create policy settings_insert_authenticated
 on public.settings
 for insert
 to authenticated
-with check (auth.role() = 'authenticated');
+with check (public.is_admin());
 
 create policy settings_update_authenticated
 on public.settings
 for update
 to authenticated
-using (auth.role() = 'authenticated')
-with check (auth.role() = 'authenticated');
+using (public.is_admin())
+with check (public.is_admin());
 
 create policy settings_delete_admin
 on public.settings
