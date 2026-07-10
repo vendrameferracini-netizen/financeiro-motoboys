@@ -7,6 +7,7 @@ import {
   signOutSupabase,
   loadProfiles,
   saveProfile,
+  loadCloudBaseEntry,
   loadCloudState,
   saveCloudRecord,
   deleteCloudRecord,
@@ -2485,6 +2486,13 @@ function findBaseEntry(date, partner) {
   const key = baseIdentity({ date, partner });
   return (state.baseEntries || []).find((row) => baseIdentity(row) === key);
 }
+async function findBaseEntryFromSupabase(date, partner) {
+  if (!supabaseOnline) return null;
+  const isoDate = isoDateOnly(date);
+  const owner = normalizeResponsible(partner);
+  if (!isoDate || !owner) return null;
+  return loadCloudBaseEntry(isoDate, owner);
+}
 function buildBaseEntryRow(id = "") {
   const partner = normalizeResponsible($("basePartner").value);
   return baseEntryCalc({
@@ -2516,9 +2524,11 @@ function clearBaseEntryFields() {
   $("baseResponsible").value = "";
   updateBaseTotals();
 }
-function fillBaseForSelectedDate() {
-  const row = findBaseEntry($("baseDate")?.value, $("basePartner")?.value);
+async function fillBaseForSelectedDate() {
+  const row = await findBaseEntryFromSupabase($("baseDate")?.value, $("basePartner")?.value) || findBaseEntry($("baseDate")?.value, $("basePartner")?.value);
   if (row) {
+    const index = state.baseEntries.findIndex((item) => item.id === row.id || baseIdentity(item) === baseIdentity(row));
+    if (index >= 0) state.baseEntries[index] = row; else state.baseEntries.unshift(row);
     fillBaseForm(row);
     showBaseFeedback("Entrada carregada do Supabase.", "ok");
     return true;
@@ -2531,6 +2541,11 @@ async function saveBaseEntryFromForm() {
   updateBaseTotals();
   const existing = findBaseEntry($("baseDate").value, $("basePartner").value);
   const row = buildBaseEntryRow(existing?.id || "");
+  const cloudExisting = await findBaseEntryFromSupabase(row.date, row.partner);
+  if (cloudExisting?.id) {
+    row.id = cloudExisting.id;
+    row.supabaseId = cloudExisting.supabaseId || cloudExisting.id;
+  }
   if (!row.date || !row.partner) {
     showBaseFeedback("Informe data e sócio para salvar.", "error");
     return;
@@ -2891,12 +2906,12 @@ function bindEvents() {
   });
   ["quickSearch", "periodFilter", "statusFilter"].forEach((id) => $(id).addEventListener("input", renderAll));
   ["baseMl", "baseShopee"].forEach((id) => $(id).addEventListener("input", updateBaseTotals));
-  $("basePartner").addEventListener("change", () => { fillBaseForSelectedDate(); renderBase(); });
+  $("basePartner").addEventListener("change", async () => { await fillBaseForSelectedDate(); renderBase(); });
   $("baseDate").addEventListener("change", async () => {
     $("baseDate").value = isoDateOnly($("baseDate").value);
     if (supabaseOnline) await syncFromSupabase();
     renderBase();
-    fillBaseForSelectedDate();
+    await fillBaseForSelectedDate();
   });
   ["dailyMl", "dailyShopee", "dailyAvulso", "dailyRateMl", "dailyRateShopee", "dailyRateAvulso"].forEach((id) => $(id).addEventListener("input", updateDailyGross));
   $("dailyTypeSwitch")?.addEventListener("click", () => setDailyType($("dailyType").value === "com coleta" ? "sem coleta" : "com coleta"));

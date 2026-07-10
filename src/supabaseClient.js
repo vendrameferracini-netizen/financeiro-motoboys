@@ -181,6 +181,21 @@ export async function loadProfiles() {
   return data || [];
 }
 
+export async function loadCloudBaseEntry(date, owner) {
+  if (!supabase) throw new Error("Supabase nao configurado.");
+  const normalizedOwner = normalizeOwner(owner);
+  const { data, error } = await supabase
+    .from("package_entries")
+    .select("*")
+    .eq("entry_date", date)
+    .eq("owner", normalizedOwner)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToRecord(data, "package_entries") : null;
+}
+
 export async function saveProfile(profile) {
   if (!supabase) throw new Error("Supabase nao configurado.");
   const row = {
