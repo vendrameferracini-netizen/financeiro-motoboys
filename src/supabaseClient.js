@@ -202,6 +202,29 @@ function dbWorkTypeToApp(value) {
 }
 
 function rowToRecord(row, table = "") {
+  if (table === "package_entries") {
+    const data = row.data || {};
+    return {
+      ...data,
+      id: data.id || row.id,
+      supabaseId: row.id,
+      source: data.source || "manual",
+      date: data.date || row.entry_date || "",
+      partner: data.partner || row.responsible || row.owner || "BASE",
+      responsible: data.responsible || row.responsible || row.owner || "BASE",
+      ml: Number(data.ml ?? row.ml_qty ?? 0),
+      shopee: Number(data.shopee ?? row.shopee_qty ?? 0),
+      totalPackages: Number(data.totalPackages ?? row.total_packages ?? 0),
+      rateMl: Number(data.rateMl ?? row.rate_ml ?? 8),
+      rateShopee: Number(data.rateShopee ?? row.rate_shopee ?? 5),
+      valueMl: Number(data.valueMl ?? row.value_ml ?? 0),
+      valueShopee: Number(data.valueShopee ?? row.value_shopee ?? 0),
+      totalPay: Number(data.totalPay ?? row.total_value ?? 0),
+      status: data.status || row.status || "pendente",
+      note: data.note || row.note || "",
+      owner: row.owner || data.owner || row.responsible || "BASE"
+    };
+  }
   if (table === "daily_launches") {
     const data = row.data || {};
     return {

@@ -724,7 +724,7 @@ function isoDateOnly(value) {
 }
 function dailyIdentity(row = {}) { return uniqueKey([isoDateOnly(row.date), row.rider]); }
 function allDaily() { return sortByRiderName(uniqueRecords([...imported.daily, ...state.daily].filter((x) => !isInvalidRiderName(x.rider)), dailyIdentity)); }
-function allBaseEntries() { return uniqueRecords([...imported.baseEntries, ...state.baseEntries], (x) => uniqueKey([x.partner, x.date, x.ml, x.shopee])); }
+function allBaseEntries() { return uniqueRecords([...imported.baseEntries, ...state.baseEntries], baseIdentity); }
 function isValidDiscountLabel(label) {
   const value = String(label || "").trim();
   return Boolean(value) && !isNumericLike(value) && !isExcelSerialLike(value) && !isTotalText(value) && !/^(nome|data|vale|valor|motorista)$/i.test(value);
@@ -1471,7 +1471,9 @@ function tableBlock(title, headers, rows) {
 
 function renderBase() {
   updateBaseTotals();
-  $("baseRows").innerHTML = allBaseEntries().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${x.partner}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.totalPay)}</td><td>${x.source === "manual" ? `<button data-remove-base="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
+  const selectedDate = isoDateOnly($("baseDate")?.value || "");
+  const rows = selectedDate ? allBaseEntries().filter((x) => isoDateOnly(x.date) === selectedDate) : allBaseEntries();
+  $("baseRows").innerHTML = rows.map((x) => `<tr><td>${displayDate(x.date)}</td><td>${x.partner}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.totalPay)}</td><td>${x.source === "manual" ? `<button data-remove-base="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="7" class="empty">Sem entradas para esta data.</td></tr>`;
   $("baseClosingRows").innerHTML = baseClosingRecords().map((x) => `<tr><td>${x.partner}</td><td>${x.period}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.valueMl)}</td><td>${money(x.valueShopee)}</td><td>${money(x.totalPay)}</td><td>${money(x.managerDiscounts)}</td><td>${money(x.variablePeriodCosts)}</td><td>${money(x.variableDiscounts)}</td><td>${money(x.netAfterVariable)}</td><td>${x.status}</td></tr>`).join("");
 }
 
@@ -2472,6 +2474,89 @@ function updateBaseTotals() {
   const row = baseEntryCalc({ ml: Number($("baseMl").value || 0), shopee: Number($("baseShopee").value || 0) });
   $("baseTotalPackages").value = num(row.totalPackages); $("baseValueMl").value = money(row.valueMl); $("baseValueShopee").value = money(row.valueShopee); $("baseTotalPay").value = money(row.totalPay);
 }
+function showBaseFeedback(message, type = "ok") {
+  const target = $("baseFeedback");
+  if (!target) return;
+  target.textContent = message;
+  target.className = `feedback ${type}`;
+}
+function baseIdentity(row = {}) { return uniqueKey([isoDateOnly(row.date), normalizeResponsible(row.partner || row.responsible)]); }
+function findBaseEntry(date, partner) {
+  const key = baseIdentity({ date, partner });
+  return (state.baseEntries || []).find((row) => baseIdentity(row) === key);
+}
+function buildBaseEntryRow(id = "") {
+  const partner = normalizeResponsible($("basePartner").value);
+  return baseEntryCalc({
+    id: id || uid("base"),
+    source: "manual",
+    date: isoDateOnly($("baseDate").value),
+    partner,
+    responsible: partner,
+    ml: Number($("baseMl").value || 0),
+    shopee: Number($("baseShopee").value || 0),
+    note: $("baseNote").value.trim(),
+    launchedBy: $("baseResponsible").value.trim()
+  });
+}
+function fillBaseForm(row) {
+  if (!row) return;
+  $("baseDate").value = isoDateOnly(row.date) || todayKey();
+  $("basePartner").value = normalizeResponsible(row.partner || row.responsible);
+  $("baseMl").value = row.ml || 0;
+  $("baseShopee").value = row.shopee || 0;
+  $("baseNote").value = row.note || "";
+  $("baseResponsible").value = row.launchedBy || row.responsibleName || "";
+  updateBaseTotals();
+}
+function clearBaseEntryFields() {
+  $("baseMl").value = 0;
+  $("baseShopee").value = 0;
+  $("baseNote").value = "";
+  $("baseResponsible").value = "";
+  updateBaseTotals();
+}
+function fillBaseForSelectedDate() {
+  const row = findBaseEntry($("baseDate")?.value, $("basePartner")?.value);
+  if (row) {
+    fillBaseForm(row);
+    showBaseFeedback("Entrada carregada do Supabase.", "ok");
+    return true;
+  }
+  clearBaseEntryFields();
+  showBaseFeedback("Nenhuma entrada salva para esta data e sócio.", "ok");
+  return false;
+}
+async function saveBaseEntryFromForm() {
+  updateBaseTotals();
+  const existing = findBaseEntry($("baseDate").value, $("basePartner").value);
+  const row = buildBaseEntryRow(existing?.id || "");
+  if (!row.date || !row.partner) {
+    showBaseFeedback("Informe data e sócio para salvar.", "error");
+    return;
+  }
+  if (!requireWrite("baseEntries", row)) return;
+  const button = $("baseForm")?.querySelector('button[type="submit"]');
+  if (button) button.disabled = true;
+  showBaseFeedback("Salvando entrada no Supabase...", "ok");
+  try {
+    const saved = await persistRecord("baseEntries", row, { throwOnError: true });
+    const index = state.baseEntries.findIndex((item) => item.id === saved.id || baseIdentity(item) === baseIdentity(saved));
+    if (index >= 0) state.baseEntries[index] = saved; else state.baseEntries.unshift(saved);
+    await syncFromSupabase();
+    const persisted = findBaseEntry(saved.date, saved.partner) || saved;
+    fillBaseForm(persisted);
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    renderAll();
+    fillBaseForm(persisted);
+    showBaseFeedback("Entrada salva com sucesso.", "ok");
+  } catch (error) {
+    console.error("Erro ao salvar entrada da base:", error);
+    showBaseFeedback(error?.message || "Erro ao salvar entrada da base.", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
 function updateDailyGross() { $("dailyGross").value = money(Number($("dailyMl").value || 0) * parseMoney($("dailyRateMl").value) + Number($("dailyShopee").value || 0) * parseMoney($("dailyRateShopee").value) + Number($("dailyAvulso").value || 0) * parseMoney($("dailyRateAvulso").value)); }
 function buildDailyRow(id = "") {
   return {
@@ -2806,6 +2891,13 @@ function bindEvents() {
   });
   ["quickSearch", "periodFilter", "statusFilter"].forEach((id) => $(id).addEventListener("input", renderAll));
   ["baseMl", "baseShopee"].forEach((id) => $(id).addEventListener("input", updateBaseTotals));
+  $("basePartner").addEventListener("change", () => { fillBaseForSelectedDate(); renderBase(); });
+  $("baseDate").addEventListener("change", async () => {
+    $("baseDate").value = isoDateOnly($("baseDate").value);
+    if (supabaseOnline) await syncFromSupabase();
+    renderBase();
+    fillBaseForSelectedDate();
+  });
   ["dailyMl", "dailyShopee", "dailyAvulso", "dailyRateMl", "dailyRateShopee", "dailyRateAvulso"].forEach((id) => $(id).addEventListener("input", updateDailyGross));
   $("dailyTypeSwitch")?.addEventListener("click", () => setDailyType($("dailyType").value === "com coleta" ? "sem coleta" : "com coleta"));
   $("dailyTypeSwitch")?.addEventListener("keydown", (e) => { if (e.key !== " " && e.key !== "Enter") return; e.preventDefault(); setDailyType($("dailyType").value === "com coleta" ? "sem coleta" : "com coleta"); });
@@ -2847,7 +2939,11 @@ function bindEvents() {
     event.stopImmediatePropagation();
     await saveDailyLaunchFromForm();
   }, true);
-  $("baseForm").addEventListener("submit", (e) => { e.preventDefault(); const row = baseEntryCalc({ id: uid("base"), source: "manual", date: $("baseDate").value, partner: $("basePartner").value, ml: Number($("baseMl").value || 0), shopee: Number($("baseShopee").value || 0), note: $("baseNote").value.trim(), responsible: $("baseResponsible").value.trim() }); if (!confirmDuplicate(state.baseEntries, row)) return; state.baseEntries.unshift(row); persistRecord("baseEntries", row); saveState("Entrada de base", row.partner); renderAll(); });
+  $("baseForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    await saveBaseEntryFromForm();
+  });
   $("discountForm").addEventListener("submit", (e) => { e.preventDefault(); e.stopImmediatePropagation(); const id = editingDiscountId || uid("disc"); const row = { id, source: "manual", date: $("discountDate").value, partner: $("discountPartner").value, rider: $("discountRider").value, closingRider: $("discountRider").value, riderMatched: true, type: $("discountType").value, value: parseMoney($("discountValue").value), code: $("discountCode").value.trim(), reason: $("discountReason").value.trim(), note: $("discountNote").value.trim(), observation: $("discountNote").value.trim() || $("discountReason").value.trim(), sheetOriginal: "LANCAMENTO MANUAL", lineOriginal: "", columnOriginal: "", origin: "LANCAMENTO MANUAL" }; row.importKey = uniqueKey([row.partner, row.rider, row.type, moneyKey(row.value), row.observation, row.id]); if (!confirmDuplicate(state.discounts, row, editingDiscountId)) return; const idx = state.discounts.findIndex((x) => x.id === id); if (idx >= 0) state.discounts[idx] = row; else state.discounts.unshift(row); editingDiscountId = ""; persistRecord("discounts", row); saveState("Desconto", `${row.partner} -> ${row.rider}`); renderAll(); }, true);
   $("riderList").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-rider]");
@@ -2914,7 +3010,22 @@ function bindEvents() {
     fillDailyForm(row);
     showDailyFeedback("Lançamento carregado para edição.", "ok");
   });
-  $("baseRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-base]"); if (!btn) return; const row = state.baseEntries.find((x) => x.id === btn.dataset.removeBase); if (!row || !window.confirm("Remover esta entrada de base?")) return; state.baseEntries = state.baseEntries.filter((x) => x.id !== row.id); removeCloudRecord("baseEntries", row); saveState("Entrada de base removida", row.partner); renderAll(); });
+  $("baseRows").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-remove-base]");
+    if (!btn) return;
+    const row = state.baseEntries.find((x) => x.id === btn.dataset.removeBase);
+    if (!row || !window.confirm("Remover esta entrada de base?")) return;
+    try {
+      await deleteCloudRecord("baseEntries", row);
+      await syncFromSupabase();
+      renderAll();
+      showBaseFeedback("Entrada removida com sucesso.", "ok");
+    } catch (error) {
+      console.error("Erro ao remover entrada da base:", error);
+      showBaseFeedback(error?.message || "Erro ao remover entrada da base.", "error");
+      showSupabaseError(error);
+    }
+  });
   $("dailyRows").addEventListener("click", async (e) => { const btn = e.target.closest("button[data-remove-daily]"); if (!btn) return; const row = state.daily.find((x) => x.id === btn.dataset.removeDaily); if (!row || !window.confirm("Remover este lançamento diário?")) return; try { await removeCloudRecord("daily", row); await syncFromSupabase(); renderAll(); showDailyFeedback("Lançamento removido com sucesso.", "ok"); } catch (error) { console.error("Erro ao remover lançamento diário:", error); showDailyFeedback(error?.message || "Erro ao remover lançamento diário.", "error"); } });
   const discountClick = (e) => {
     const edit = e.target.closest("button[data-edit-discount]");
