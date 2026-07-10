@@ -831,9 +831,9 @@ drop policy if exists daily_update_operator_today on public.daily_launches;
 drop policy if exists daily_delete_operator_today on public.daily_launches;
 create policy daily_select_all on public.daily_launches for select to authenticated using (true);
 create policy daily_admin_all on public.daily_launches for all to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy daily_insert_operator on public.daily_launches for insert to authenticated with check (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
-create policy daily_update_operator_today on public.daily_launches for update to authenticated using (public.current_profile_role() = 'OPERADOR' and launch_date = current_date) with check (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
-create policy daily_delete_operator_today on public.daily_launches for delete to authenticated using (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
+create policy daily_insert_operator on public.daily_launches for insert to authenticated with check (public.current_profile_role() = 'OPERADOR');
+create policy daily_update_operator_today on public.daily_launches for update to authenticated using (public.current_profile_role() = 'OPERADOR') with check (public.current_profile_role() = 'OPERADOR');
+create policy daily_delete_operator_today on public.daily_launches for delete to authenticated using (public.current_profile_role() = 'OPERADOR');
 
 drop policy if exists package_select_all on public.package_entries;
 drop policy if exists package_insert_owner on public.package_entries;

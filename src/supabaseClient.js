@@ -196,7 +196,34 @@ export async function saveProfile(profile) {
   return data;
 }
 
-function rowToRecord(row) {
+function dbWorkTypeToApp(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return raw === "sem_coleta" ? "sem coleta" : "com coleta";
+}
+
+function rowToRecord(row, table = "") {
+  if (table === "daily_launches") {
+    const data = row.data || {};
+    return {
+      ...data,
+      id: data.id || row.id,
+      supabaseId: row.id,
+      source: data.source || "manual",
+      date: data.date || row.launch_date || "",
+      rider: data.rider || row.motoboy_name || "",
+      dailyType: data.dailyType || dbWorkTypeToApp(row.launch_type),
+      ml: Number(data.ml ?? row.ml_qty ?? 0),
+      shopee: Number(data.shopee ?? row.shopee_qty ?? 0),
+      avulso: Number(data.avulso ?? row.avulso_qty ?? 0),
+      rateMl: Number(data.rateMl ?? row.rate_ml ?? 0),
+      rateShopee: Number(data.rateShopee ?? row.rate_shopee ?? 0),
+      rateAvulso: Number(data.rateAvulso ?? row.rate_avulso ?? 0),
+      gross: Number(data.gross ?? row.gross_total ?? 0),
+      responsible: data.responsible || row.responsible_name || "",
+      note: data.note || row.note || "",
+      owner: row.owner || data.owner || "BASE"
+    };
+  }
   return { ...(row.data || {}), id: row.id, supabaseId: row.id, owner: row.owner || row.data?.owner };
 }
 
@@ -205,7 +232,7 @@ function recordToRow(record, table) {
   const data = { ...record, id, supabaseId: id };
   const base = {
     id,
-    owner: table === "motoboys" ? "BASE" : ownerFromRecord(record),
+    owner: table === "motoboys" || table === "daily_launches" ? "BASE" : ownerFromRecord(record),
     data,
     updated_at: new Date().toISOString()
   };
@@ -368,7 +395,7 @@ export async function loadCloudState(defaultState) {
       : query.order("created_at", { ascending: false });
     const { data, error } = await orderedQuery;
     if (error) throw error;
-    next[bucket] = (data || []).map(rowToRecord);
+    next[bucket] = (data || []).map((row) => rowToRecord(row, table));
   }));
 
   const { data: settings, error: settingsError } = await supabase
@@ -392,9 +419,9 @@ export async function saveCloudRecord(bucket, record) {
   const table = TABLES[bucket];
   if (!supabase || !table) throw new Error("Sem conexao com Supabase. Nao foi possivel salvar.");
   const row = recordToRow(record, table);
-  const { error } = await supabase.from(table).upsert(row, { onConflict: "id" });
+  const { data, error } = await supabase.from(table).upsert(row, { onConflict: "id" }).select("*").single();
   if (error) throw error;
-  return row.data;
+  return rowToRecord(data, table);
 }
 
 export async function deleteCloudRecord(bucket, record) {

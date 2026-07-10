@@ -103,7 +103,7 @@ function saveState(action, detail, meta = null) {
 
 function showSupabaseError(error) {
   const message = error?.message || "Sem conexão com Supabase. Não foi possível salvar.";
-  console.error(message, error);
+  console.error("Erro Supabase:", error);
   const target = $("supabaseFeedback");
   if (target) {
     target.textContent = message.includes("Supabase") ? message : `Sem conexão com Supabase. Não foi possível salvar. ${message}`;
@@ -111,10 +111,22 @@ function showSupabaseError(error) {
   }
 }
 
-async function persistRecord(bucket, record) {
-  if (!requireWrite(bucket, record)) return record;
+function showDailyFeedback(message, type = "ok") {
+  const target = $("dailyFeedback");
+  if (!target) return;
+  target.textContent = message;
+  target.className = `feedback ${type}`;
+}
+
+async function persistRecord(bucket, record, options = {}) {
+  if (!requireWrite(bucket, record)) {
+    if (options.throwOnError) throw new Error(PERMISSION_MESSAGE);
+    return record;
+  }
   if (!supabaseOnline) {
-    showSupabaseError(new Error("Sem conexão com Supabase. Não foi possível salvar."));
+    const error = new Error("Sem conexão com Supabase. Não foi possível salvar.");
+    showSupabaseError(error);
+    if (options.throwOnError) throw error;
     return record;
   }
   try {
@@ -126,6 +138,7 @@ async function persistRecord(bucket, record) {
     return record;
   } catch (error) {
     showSupabaseError(error);
+    if (options.throwOnError) throw error;
     return record;
   }
 }
@@ -259,7 +272,7 @@ function ownsResponsible(value) {
 }
 function canWriteRecord(bucket, record = {}) {
   if (isAdminRole()) return true;
-  if (isOperatorRole()) return bucket === "daily" && (!record.date || record.date === todayKey());
+  if (isOperatorRole()) return bucket === "daily";
   if (!isPartnerRole()) return false;
   if (bucket === "baseEntries") return ownsResponsible(record.partner || record.responsible);
   if (bucket === "discounts") return ownsResponsible(record.partner || record.responsible) && normalizeResponsible(record.partner || record.responsible) !== "BASE";
@@ -700,7 +713,17 @@ function uniqueRecords(list, keyFn) {
     return true;
   });
 }
-function allDaily() { return sortByRiderName(uniqueRecords([...imported.daily, ...state.daily].filter((x) => !isInvalidRiderName(x.rider)), (x) => uniqueKey([x.sheetOriginal || "manual", x.date, x.rider, x.ml, x.shopee, x.valueMl, x.valueShopee, x.gross]))); }
+function isoDateOnly(value) {
+  if (!value) return "";
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const br = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+  const d = new Date(`${text}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? text : d.toISOString().slice(0, 10);
+}
+function dailyIdentity(row = {}) { return uniqueKey([isoDateOnly(row.date), row.rider]); }
+function allDaily() { return sortByRiderName(uniqueRecords([...imported.daily, ...state.daily].filter((x) => !isInvalidRiderName(x.rider)), dailyIdentity)); }
 function allBaseEntries() { return uniqueRecords([...imported.baseEntries, ...state.baseEntries], (x) => uniqueKey([x.partner, x.date, x.ml, x.shopee])); }
 function isValidDiscountLabel(label) {
   const value = String(label || "").trim();
@@ -1452,7 +1475,12 @@ function renderBase() {
   $("baseClosingRows").innerHTML = baseClosingRecords().map((x) => `<tr><td>${x.partner}</td><td>${x.period}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.totalPackages)}</td><td>${money(x.valueMl)}</td><td>${money(x.valueShopee)}</td><td>${money(x.totalPay)}</td><td>${money(x.managerDiscounts)}</td><td>${money(x.variablePeriodCosts)}</td><td>${money(x.variableDiscounts)}</td><td>${money(x.netAfterVariable)}</td><td>${x.status}</td></tr>`).join("");
 }
 
-function renderDaily() { updateDailyGross(); $("dailyRows").innerHTML = allDaily().map((x) => { const actions = x.source === "manual" && canWriteRecord("daily", x) ? `<button data-edit-daily="${escapeHtml(x.id)}">Editar</button> <button data-remove-daily="${escapeHtml(x.id)}">Remover</button>` : ""; return `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider)}</td><td>${workTypeBadge(dailyTypeFor(x))}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.avulso)}</td><td>${money(x.gross)}</td><td>${actions}</td></tr>`; }).join(""); }
+function renderDaily() {
+  updateDailyGross();
+  const selectedDate = isoDateOnly($("dailyDate")?.value || "");
+  const rows = selectedDate ? allDaily().filter((x) => isoDateOnly(x.date) === selectedDate) : allDaily();
+  $("dailyRows").innerHTML = rows.map((x) => { const actions = x.source === "manual" && canWriteRecord("daily", x) ? `<button data-edit-daily="${escapeHtml(x.id)}">Editar</button> <button data-remove-daily="${escapeHtml(x.id)}">Remover</button>` : ""; return `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider)}</td><td>${workTypeBadge(dailyTypeFor(x))}</td><td>${num(x.ml)}</td><td>${num(x.shopee)}</td><td>${num(x.avulso)}</td><td>${money(x.gross)}</td><td>${actions}</td></tr>`; }).join("") || `<tr><td colspan="8" class="empty">Sem lançamentos para esta data.</td></tr>`;
+}
 function renderDiscounts() {
   $("discountRows").innerHTML = allDiscounts().map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.partner || "BASE")}</td><td>${escapeHtml(x.rider)}</td><td>${escapeHtml(x.type)}</td><td>${money(x.value)}</td><td>${escapeHtml(x.observation || x.reason || x.note || "")}</td><td>${escapeHtml(x.sheetOriginal || "")}</td><td>${escapeHtml(x.lineOriginal || "")}</td><td>${escapeHtml(x.columnOriginal || "")}</td><td>${x.source === "manual" ? `<button data-edit-discount="${escapeHtml(x.id)}">Editar</button> <button data-remove-discount="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
   if ($("baseDiscountRows")) $("baseDiscountRows").innerHTML = allDiscounts().filter((x) => (x.partner || "BASE") === "BASE").map((x) => `<tr><td>${displayDate(x.date)}</td><td>${escapeHtml(x.rider || "")}</td><td>${escapeHtml(x.type)}</td><td>${money(x.value)}</td><td>${escapeHtml(x.reason || "")}</td><td>${escapeHtml(x.observation || x.note || "")}</td><td>${x.source === "manual" ? `<button data-edit-discount="${escapeHtml(x.id)}">Editar</button> <button data-remove-discount="${escapeHtml(x.id)}">Remover</button>` : ""}</td></tr>`).join("");
@@ -2445,6 +2473,99 @@ function updateBaseTotals() {
   $("baseTotalPackages").value = num(row.totalPackages); $("baseValueMl").value = money(row.valueMl); $("baseValueShopee").value = money(row.valueShopee); $("baseTotalPay").value = money(row.totalPay);
 }
 function updateDailyGross() { $("dailyGross").value = money(Number($("dailyMl").value || 0) * parseMoney($("dailyRateMl").value) + Number($("dailyShopee").value || 0) * parseMoney($("dailyRateShopee").value) + Number($("dailyAvulso").value || 0) * parseMoney($("dailyRateAvulso").value)); }
+function buildDailyRow(id = "") {
+  return {
+    id: id || uid("daily"),
+    source: "manual",
+    date: isoDateOnly($("dailyDate").value),
+    rider: $("dailyRider").value,
+    dailyType: $("dailyType").value,
+    ml: Number($("dailyMl").value || 0),
+    shopee: Number($("dailyShopee").value || 0),
+    avulso: Number($("dailyAvulso").value || 0),
+    rateMl: parseMoney($("dailyRateMl").value),
+    rateShopee: parseMoney($("dailyRateShopee").value),
+    rateAvulso: parseMoney($("dailyRateAvulso").value),
+    gross: parseMoney($("dailyGross").value),
+    responsible: $("dailyResponsible").value.trim(),
+    note: $("dailyNote").value.trim()
+  };
+}
+function findDailyLaunch(date, rider) {
+  const key = dailyIdentity({ date, rider });
+  return (state.daily || []).find((row) => dailyIdentity(row) === key);
+}
+function fillDailyForm(row) {
+  if (!row) return;
+  editingDailyId = row.id || "";
+  $("dailyDate").value = isoDateOnly(row.date) || todayKey();
+  $("dailyRider").value = row.rider || "";
+  setDailyType(dailyTypeFor(row), false);
+  $("dailyMl").value = row.ml || 0;
+  $("dailyShopee").value = row.shopee || 0;
+  $("dailyAvulso").value = row.avulso || 0;
+  $("dailyRateMl").value = money(row.rateMl);
+  $("dailyRateShopee").value = money(row.rateShopee);
+  $("dailyRateAvulso").value = money(row.rateAvulso);
+  $("dailyResponsible").value = row.responsible || "";
+  $("dailyNote").value = row.note || "";
+  updateDailyGross();
+}
+function clearDailyLaunchFields() {
+  const r = riderByName($("dailyRider")?.value);
+  editingDailyId = "";
+  if (r) setDailyType(dailyTypeFromRider(r));
+  $("dailyMl").value = 0;
+  $("dailyShopee").value = 0;
+  $("dailyAvulso").value = 0;
+  $("dailyResponsible").value = "";
+  $("dailyNote").value = "";
+  updateDailyGross();
+}
+function fillDailyForSelectedDate() {
+  const row = findDailyLaunch($("dailyDate")?.value, $("dailyRider")?.value);
+  if (row) {
+    fillDailyForm(row);
+    showDailyFeedback("Lançamento carregado do Supabase.", "ok");
+    return true;
+  }
+  clearDailyLaunchFields();
+  showDailyFeedback("Nenhum lançamento salvo para esta data e motoboy.", "ok");
+  return false;
+}
+async function saveDailyLaunchFromForm() {
+  updateDailyGross();
+  const existing = findDailyLaunch($("dailyDate").value, $("dailyRider").value);
+  const id = editingDailyId || existing?.id || uid("daily");
+  const row = buildDailyRow(id);
+  if (!row.date || !row.rider) {
+    showDailyFeedback("Informe data e motoboy para salvar.", "error");
+    return;
+  }
+  if (!requireWrite("daily", row)) return;
+  const button = $("dailyForm")?.querySelector('button[type="submit"]');
+  if (button) button.disabled = true;
+  showDailyFeedback("Salvando lançamento no Supabase...", "ok");
+  try {
+    const saved = await persistRecord("daily", row, { throwOnError: true });
+    const index = state.daily.findIndex((item) => item.id === saved.id || dailyIdentity(item) === dailyIdentity(saved));
+    if (index >= 0) state.daily[index] = saved; else state.daily.unshift(saved);
+    editingDailyId = saved.id;
+    await syncFromSupabase();
+    const persisted = findDailyLaunch(saved.date, saved.rider) || saved;
+    fillDailyForm(persisted);
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    showDailyFeedback("Lançamento salvo com sucesso.", "ok");
+    renderAll();
+    fillDailyForm(persisted);
+    showDailyFeedback("Lançamento salvo com sucesso.", "ok");
+  } catch (error) {
+    console.error("Erro ao salvar lançamento diário:", error);
+    showDailyFeedback(error?.message || "Erro ao salvar lançamento diário.", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
 function fillDefaults() { const today = new Date().toISOString().slice(0, 10); ["baseDate", "dailyDate", "discountDate", "expenseDate", "paymentDate"].forEach((id) => { if ($(id)) $(id).value = today; }); setDailyType("com coleta"); updateBaseTotals(); updateDailyGross(); updateExpensePeriodFields(); }
 
 function setMobileMenu(open) {
@@ -2685,7 +2806,18 @@ function bindEvents() {
   ["dailyMl", "dailyShopee", "dailyAvulso", "dailyRateMl", "dailyRateShopee", "dailyRateAvulso"].forEach((id) => $(id).addEventListener("input", updateDailyGross));
   $("dailyTypeSwitch")?.addEventListener("click", () => setDailyType($("dailyType").value === "com coleta" ? "sem coleta" : "com coleta"));
   $("dailyTypeSwitch")?.addEventListener("keydown", (e) => { if (e.key !== " " && e.key !== "Enter") return; e.preventDefault(); setDailyType($("dailyType").value === "com coleta" ? "sem coleta" : "com coleta"); });
-  $("dailyRider").addEventListener("change", () => { const r = riderByName($("dailyRider").value); if (r) setDailyType(dailyTypeFromRider(r)); });
+  $("dailyRider").addEventListener("change", () => {
+    if (fillDailyForSelectedDate()) return;
+    const r = riderByName($("dailyRider").value);
+    if (r) setDailyType(dailyTypeFromRider(r));
+    updateDailyGross();
+  });
+  $("dailyDate").addEventListener("change", async () => {
+    $("dailyDate").value = isoDateOnly($("dailyDate").value);
+    if (supabaseOnline) await syncFromSupabase();
+    renderDaily();
+    fillDailyForSelectedDate();
+  });
   addMoneyBlur(["dailyRateMl", "dailyRateShopee", "dailyRateAvulso", "discountValue", "expenseValue", "paymentValue", "riderRateMl", "riderRateShopee", "riderRateAvulso", "configMl", "configShopee", "configAvulso"]);
   $("riderCollection").addEventListener("change", applyWorkTypeDefaultRates);
   $("riderForm").addEventListener("submit", (e) => {
@@ -2707,22 +2839,12 @@ function bindEvents() {
   guardSubmit("dailyForm", "daily", () => ({ date: $("dailyDate")?.value || todayKey() }));
   guardSubmit("discountForm", "discounts", () => ({ partner: $("discountPartner")?.value || "" }));
   guardSubmit("expenseForm", "expenses", () => ({ responsible: $("expenseResponsible")?.value || "" }));
-  $("dailyForm")?.addEventListener("submit", (event) => {
-    if (!editingDailyId) return;
+  $("dailyForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
-    const row = { id: editingDailyId, source: "manual", date: $("dailyDate").value, rider: $("dailyRider").value, dailyType: $("dailyType").value, ml: Number($("dailyMl").value || 0), shopee: Number($("dailyShopee").value || 0), avulso: Number($("dailyAvulso").value || 0), rateMl: parseMoney($("dailyRateMl").value), rateShopee: parseMoney($("dailyRateShopee").value), rateAvulso: parseMoney($("dailyRateAvulso").value), gross: parseMoney($("dailyGross").value), responsible: $("dailyResponsible").value.trim(), note: $("dailyNote").value.trim() };
-    if (!requireWrite("daily", row)) return;
-    const index = state.daily.findIndex((x) => x.id === editingDailyId);
-    if (index >= 0) state.daily[index] = row;
-    else state.daily.unshift(row);
-    editingDailyId = "";
-    persistRecord("daily", row);
-    saveState("Lançamento diário editado", `${row.rider} - ${workTypeLabel(row.dailyType)}`);
-    renderAll();
+    await saveDailyLaunchFromForm();
   }, true);
   $("baseForm").addEventListener("submit", (e) => { e.preventDefault(); const row = baseEntryCalc({ id: uid("base"), source: "manual", date: $("baseDate").value, partner: $("basePartner").value, ml: Number($("baseMl").value || 0), shopee: Number($("baseShopee").value || 0), note: $("baseNote").value.trim(), responsible: $("baseResponsible").value.trim() }); if (!confirmDuplicate(state.baseEntries, row)) return; state.baseEntries.unshift(row); persistRecord("baseEntries", row); saveState("Entrada de base", row.partner); renderAll(); });
-  $("dailyForm").addEventListener("submit", (e) => { e.preventDefault(); const row = { id: uid("daily"), source: "manual", date: $("dailyDate").value, rider: $("dailyRider").value, dailyType: $("dailyType").value, ml: Number($("dailyMl").value || 0), shopee: Number($("dailyShopee").value || 0), avulso: Number($("dailyAvulso").value || 0), rateMl: parseMoney($("dailyRateMl").value), rateShopee: parseMoney($("dailyRateShopee").value), rateAvulso: parseMoney($("dailyRateAvulso").value), gross: parseMoney($("dailyGross").value), responsible: $("dailyResponsible").value.trim(), note: $("dailyNote").value.trim() }; if (!confirmDuplicate(state.daily, row)) return; state.daily.unshift(row); persistRecord("daily", row); saveState("Lançamento diário", `${row.rider} - ${workTypeLabel(row.dailyType)}`); renderAll(); });
   $("discountForm").addEventListener("submit", (e) => { e.preventDefault(); e.stopImmediatePropagation(); const id = editingDiscountId || uid("disc"); const row = { id, source: "manual", date: $("discountDate").value, partner: $("discountPartner").value, rider: $("discountRider").value, closingRider: $("discountRider").value, riderMatched: true, type: $("discountType").value, value: parseMoney($("discountValue").value), code: $("discountCode").value.trim(), reason: $("discountReason").value.trim(), note: $("discountNote").value.trim(), observation: $("discountNote").value.trim() || $("discountReason").value.trim(), sheetOriginal: "LANCAMENTO MANUAL", lineOriginal: "", columnOriginal: "", origin: "LANCAMENTO MANUAL" }; row.importKey = uniqueKey([row.partner, row.rider, row.type, moneyKey(row.value), row.observation, row.id]); if (!confirmDuplicate(state.discounts, row, editingDiscountId)) return; const idx = state.discounts.findIndex((x) => x.id === id); if (idx >= 0) state.discounts[idx] = row; else state.discounts.unshift(row); editingDiscountId = ""; persistRecord("discounts", row); saveState("Desconto", `${row.partner} -> ${row.rider}`); renderAll(); }, true);
   $("riderList").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-rider]");
@@ -2786,22 +2908,11 @@ function bindEvents() {
     if (!btn) return;
     const row = state.daily.find((x) => x.id === btn.dataset.editDaily);
     if (!row) return;
-    editingDailyId = row.id;
-    $("dailyDate").value = row.date || todayKey();
-    $("dailyRider").value = row.rider || "";
-    setDailyType(dailyTypeFor(row), false);
-    $("dailyMl").value = row.ml || 0;
-    $("dailyShopee").value = row.shopee || 0;
-    $("dailyAvulso").value = row.avulso || 0;
-    $("dailyRateMl").value = money(row.rateMl);
-    $("dailyRateShopee").value = money(row.rateShopee);
-    $("dailyRateAvulso").value = money(row.rateAvulso);
-    $("dailyResponsible").value = row.responsible || "";
-    $("dailyNote").value = row.note || "";
-    updateDailyGross();
+    fillDailyForm(row);
+    showDailyFeedback("Lançamento carregado para edição.", "ok");
   });
   $("baseRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-base]"); if (!btn) return; const row = state.baseEntries.find((x) => x.id === btn.dataset.removeBase); if (!row || !window.confirm("Remover esta entrada de base?")) return; state.baseEntries = state.baseEntries.filter((x) => x.id !== row.id); removeCloudRecord("baseEntries", row); saveState("Entrada de base removida", row.partner); renderAll(); });
-  $("dailyRows").addEventListener("click", (e) => { const btn = e.target.closest("button[data-remove-daily]"); if (!btn) return; const row = state.daily.find((x) => x.id === btn.dataset.removeDaily); if (!row || !window.confirm("Remover este lançamento diário?")) return; state.daily = state.daily.filter((x) => x.id !== row.id); removeCloudRecord("daily", row); saveState("Lançamento diário removido", row.rider); renderAll(); });
+  $("dailyRows").addEventListener("click", async (e) => { const btn = e.target.closest("button[data-remove-daily]"); if (!btn) return; const row = state.daily.find((x) => x.id === btn.dataset.removeDaily); if (!row || !window.confirm("Remover este lançamento diário?")) return; try { await removeCloudRecord("daily", row); await syncFromSupabase(); renderAll(); showDailyFeedback("Lançamento removido com sucesso.", "ok"); } catch (error) { console.error("Erro ao remover lançamento diário:", error); showDailyFeedback(error?.message || "Erro ao remover lançamento diário.", "error"); } });
   const discountClick = (e) => {
     const edit = e.target.closest("button[data-edit-discount]");
     const remove = e.target.closest("button[data-remove-discount]");

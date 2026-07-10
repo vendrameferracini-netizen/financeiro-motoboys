@@ -67,20 +67,20 @@ create policy daily_insert_operator
 on public.daily_launches
 for insert
 to authenticated
-with check (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
+with check (public.current_profile_role() = 'OPERADOR');
 
 create policy daily_update_operator_today
 on public.daily_launches
 for update
 to authenticated
-using (public.current_profile_role() = 'OPERADOR' and launch_date = current_date)
-with check (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
+using (public.current_profile_role() = 'OPERADOR')
+with check (public.current_profile_role() = 'OPERADOR');
 
 create policy daily_delete_operator_today
 on public.daily_launches
 for delete
 to authenticated
-using (public.current_profile_role() = 'OPERADOR' and launch_date = current_date);
+using (public.current_profile_role() = 'OPERADOR');
 
 insert into public.profiles(id, username, role, full_name, active)
 select id, 'operador', 'OPERADOR', 'Operador', true
