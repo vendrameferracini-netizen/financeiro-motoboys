@@ -2561,7 +2561,10 @@ async function saveDailyLaunchFromForm() {
     showDailyFeedback("Lançamento salvo com sucesso.", "ok");
   } catch (error) {
     console.error("Erro ao salvar lançamento diário:", error);
-    showDailyFeedback(error?.message || "Erro ao salvar lançamento diário.", "error");
+    const message = /row-level security|RLS/i.test(error?.message || "")
+      ? "Erro de permissão no Supabase/RLS. Rode o arquivo supabase-daily-persistence-fix.sql no Supabase SQL Editor."
+      : (error?.message || "Erro ao salvar lançamento diário.");
+    showDailyFeedback(message, "error");
   } finally {
     if (button) button.disabled = false;
   }
