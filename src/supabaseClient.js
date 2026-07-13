@@ -302,6 +302,7 @@ function recordToRow(record, table) {
     const gross = toNumber(record.gross, (ml * rateMl) + (shopee * rateShopee) + (avulso * rateAvulso));
     return {
       ...base,
+      data: { ...data, owner: "BASE" },
       launch_date: toDate(record.date),
       motoboy_name: cleanText(record.rider || record.motoboyName),
       launch_type: launchType,
